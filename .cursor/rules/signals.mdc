@@ -1,0 +1,88 @@
+---
+description: Rules for digital signal processing, filtering, and artifact rejection
+alwaysApply: false
+---
+# Signal Processing Rules
+
+## Sampling & Nyquist
+- ALWAYS verify Nyquist criterion: fs > 2 * f_max
+- Document the expected frequency content of signals
+- Use anti-aliasing filters before any downsampling operation
+- Typical BCI bands: Delta (0.5-4Hz), Theta (4-8Hz), Alpha (8-13Hz), Beta (13-30Hz), Gamma (30-100Hz)
+
+## Filtering Best Practices
+- Prefer zero-phase filtering (`filtfilt`) for offline analysis to avoid phase distortion
+- Use causal filters only when real-time processing is required
+- Document filter order, type (Butterworth, Chebyshev, etc.), and cutoff frequencies
+- Check for filter instability with `scipy.signal.tf2zpk` for high-order filters
+
+## Edge Effects
+- Always pad signals appropriately before filtering (reflect, constant, or wrap)
+- Trim edge artifacts after processing
+- Document the number of samples affected by edge effects
+
+## Artifact Rejection
+- Implement amplitude thresholding before ICA
+- Use kurtosis and entropy metrics for automatic artifact component detection
+- Validate ICA unmixing matrices are invertible (condition number check)
+- Document the physiological basis for artifact classification
+
+## ICA & Unmixing
+- Verify whitening/sphering before ICA
+- Check that mixing matrix A and unmixing matrix W satisfy: W @ A ≈ I
+- Use `mne.preprocessing.ICA` for EEG/MEG-specific implementations
+- Document the number of components and explained variance
+
+## Spectral Analysis
+- Use Welch's method for PSD estimation (specify nperseg, noverlap)
+- Apply appropriate windowing (Hann, Hamming) to reduce spectral leakage
+- Report frequency resolution: Δf = fs / N
+
+## Non-Stationary Sensor Mapping — SUBSENSE CRITICAL
+
+Unlike fixed electrodes (EEG) or rigid arrays (MEG), Subsense nanoparticle sensors are **fluidic** and may drift due to:
+- Blood flow and microcirculation
+- Cardiac pulse pressure waves
+- Respiration-induced pressure changes
+- Brownian motion (for sufficiently small particles)
+
+### Probabilistic Coordinate Rule
+**ALWAYS treat sensor coordinates as probability distributions, not fixed points:**
+
+```
+sensor_position ~ N(μ, Σ)  # 3D Gaussian with mean μ and covariance Σ
+```
+
+- **μ (mean)**: Expected position from initial localization
+- **Σ (covariance)**: Positional uncertainty matrix (may be anisotropic — e.g., higher variance along vessel axis)
+- Update position estimates with each measurement epoch using Bayesian filtering (Kalman, particle filter)
+
+### Implementation Requirements
+- Lead field matrices must be computed as **expected values over position distributions**
+- Source localization must propagate positional uncertainty into source uncertainty
+- Monte Carlo sampling may be required for non-Gaussian position distributions
+- Document the assumed drift model (random walk, bounded diffusion, pulsatile oscillation)
+
+## Hemodynamic & Fluidic Artifacts — SUBSENSE CRITICAL
+
+Pulse-related movement is a **first-principle challenge** for intravascular or tissue-embedded nanoparticle sensors. This is NOT optional filtering — it's fundamental to Subsense signal integrity.
+
+### Artifact Sources to Model
+1. **Cardiac pulsatility**: ~1-2 Hz fundamental + harmonics, causes:
+   - Sensor displacement (position modulation)
+   - Local field distortion from moving blood volume
+   - ME transducer strain from pressure waves
+2. **Respiratory modulation**: ~0.2-0.5 Hz envelope on cardiac signal
+3. **Vasomotion**: Slow (~0.1 Hz) vessel diameter oscillations
+4. **Turbulent flow**: Broadband noise near bifurcations or stenoses
+
+### Mandatory Modeling Steps
+- **Acquire or simulate** a reference hemodynamic signal (PPG, pulse ox, or synthetic)
+- **Characterize** the artifact transfer function: How does 1 mmHg pressure → sensor signal?
+- **Implement adaptive filtering** with hemodynamic reference (e.g., LMS, RLS)
+- **Test artifact rejection** at physiological extremes (resting HR ~60 bpm to exercise ~180 bpm)
+
+### Spectral Considerations
+- Cardiac artifacts overlap with Delta/Theta neural bands — **do not simply highpass filter**
+- Use **notch filtering at cardiac fundamental + harmonics** or adaptive cancellation
+- Preserve neural content while removing pulsatile contamination

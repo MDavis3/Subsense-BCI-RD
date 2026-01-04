@@ -1,0 +1,57 @@
+"""
+Physical Constants for Subsense BCI Simulations
+
+All constants include units in their names and reference literature sources.
+"""
+
+from __future__ import annotations
+
+# Electromagnetic Constants
+SPEED_OF_LIGHT_M_S: float = 299_792_458.0  # m/s, exact by definition
+VACUUM_PERMEABILITY_H_M: float = 1.25663706212e-6  # H/m (henries per meter)
+VACUUM_PERMITTIVITY_F_M: float = 8.8541878128e-12  # F/m (farads per meter)
+
+# Tissue Conductivity (S/m) - Reference: Gabriel et al., 1996
+BRAIN_CONDUCTIVITY_S_M: float = 0.33  # Gray matter at low frequency
+SKULL_CONDUCTIVITY_S_M: float = 0.0042  # Compact bone
+SCALP_CONDUCTIVITY_S_M: float = 0.43  # Skin
+CSF_CONDUCTIVITY_S_M: float = 1.79  # Cerebrospinal fluid
+
+# Magnetoelectric Transducer Parameters (ActiveEcho System)
+# Reference: Based on ME film specifications
+ME_FILM_LENGTH_MM: float = 5.0
+ME_FILM_WIDTH_MM: float = 2.0
+ME_FILM_THICKNESS_MM: float = 0.18
+ME_RESONANT_FREQ_KHZ: float = 340.0
+AUX_COIL_INDUCTANCE_NH: float = 250.0
+
+# TX Array Parameters
+TX_COIL_DIAMETER_MM: float = 42.0
+TX_COIL_SPACING_MM: float = 24.0  # Center-to-center for mutual inductance cancellation
+
+# Typical BCI Frequency Bands (Hz)
+DELTA_BAND_HZ: tuple[float, float] = (0.5, 4.0)
+THETA_BAND_HZ: tuple[float, float] = (4.0, 8.0)
+ALPHA_BAND_HZ: tuple[float, float] = (8.0, 13.0)
+BETA_BAND_HZ: tuple[float, float] = (13.0, 30.0)
+GAMMA_BAND_HZ: tuple[float, float] = (30.0, 100.0)
+HIGH_GAMMA_BAND_HZ: tuple[float, float] = (100.0, 200.0)
+
+# =============================================================================
+# Phase 1 Simulation Parameters - Stochastic Nanoparticle Cloud
+# =============================================================================
+
+# Domain geometry
+CLOUD_VOLUME_SIDE_MM: float = 1.0  # Cubic domain extent (centered at origin)
+
+# Singularity handling for lead field computation
+# At r < this threshold, distance is clamped to prevent infinite voltage
+SINGULARITY_THRESHOLD_MM: float = 0.05
+
+# Default simulation parameters (per .cursorrules reproducibility mandate)
+DEFAULT_SENSOR_COUNT: int = 10_000
+DEFAULT_RANDOM_SEED: int = 42
+
+# Particle parameters (for collision checking if needed)
+PARTICLE_RADIUS_NM: float = 100.0  # Assumed nanoparticle radius
+

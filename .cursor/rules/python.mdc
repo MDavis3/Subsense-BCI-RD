@@ -1,0 +1,51 @@
+---
+description: Python coding standards and PEP8 conventions for the Subsense project
+alwaysApply: false
+---
+# Python Standards for Subsense BCI R&D
+
+## Type Hints (Required)
+- Use type hints for ALL function signatures
+- Use `numpy.ndarray` or `npt.NDArray[np.float64]` for array types
+- Import `from __future__ import annotations` for forward references
+- Example:
+  ```python
+  def compute_lead_field(
+      sources: np.ndarray,  # Shape: (n_sources, 3)
+      sensors: np.ndarray,  # Shape: (n_sensors, 3)
+      conductivity: float = 0.33  # S/m
+  ) -> np.ndarray:  # Shape: (n_sensors, n_sources)
+  ```
+
+## Docstrings (NumPy Style)
+- Use NumPy-style docstrings for all public functions
+- Include Parameters, Returns, Raises, and Examples sections
+- Document array shapes explicitly in parameter descriptions
+- Include mathematical equations in LaTeX format where applicable
+
+## Naming Conventions
+- Variables: `snake_case` (e.g., `sampling_rate_hz`)
+- Constants: `UPPER_SNAKE_CASE` (e.g., `SPEED_OF_LIGHT_M_S`)
+- Classes: `PascalCase` (e.g., `LeadFieldModel`)
+- Include units in variable names when not obvious (e.g., `distance_mm`, `frequency_hz`)
+
+## Imports
+- Group imports: stdlib, third-party, local (separated by blank lines)
+- Use explicit imports: `from scipy.signal import butter, filtfilt`
+- Avoid `from module import *`
+
+## Error Handling
+- Use specific exception types (ValueError, TypeError, etc.)
+- Include informative error messages with expected vs actual values
+- Validate input shapes and types at function entry points
+
+## Testing
+- Write tests for edge cases: empty arrays, single elements, boundary conditions
+- Use `pytest.approx` for floating-point comparisons
+- Test against known analytical solutions where possible
+- Achieve >90% coverage for physics-critical modules
+
+## Performance
+- Profile before optimizing (use `cProfile` or `line_profiler`)
+- Prefer vectorized NumPy operations over loops
+- Document computational complexity in docstrings for expensive operations

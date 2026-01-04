@@ -1,0 +1,51 @@
+---
+description: Rules for mathematical physics, signal decay, and transfer functions
+alwaysApply: false
+---
+# Physics & Mathematical Modeling Rules
+
+## Signal Decay Models — CRITICAL FOR SUBSENSE
+
+**Do NOT assume a single decay law.** Different physical quantities have different spatial dependencies:
+
+| Quantity | Decay Law | Context |
+|----------|-----------|---------|
+| Electrical potential (voltage) in volume conductor | \(1/r\) | Point source in homogeneous medium |
+| Signal power | \(1/r^2\) | Power ∝ V², hence squared decay |
+| Magnetic dipole field (far-field) | \(1/r^3\) | ME backscatter in far-field regime |
+| Near-field magnetic coupling | Complex | Depends on coil geometry and mutual inductance |
+
+### Magnetoelectric (ME) Transducer Decay Rules
+- **ALWAYS verify** the specific physics mechanism before implementing decay:
+  - For ME voltage response to magnetic field: check strain-mediated coupling equations
+  - For Active Echo backscatter strength: typically \(1/r^2\) to \(1/r^3\) depending on regime
+  - For WPT efficiency: includes both transmit and receive path losses (compound decay)
+- **Reference the ME coupling coefficient** \(α_{ME}\) and its frequency dependence near resonance
+- **Document assumptions**: Is this quasi-static? Near-field inductive? Far-field radiative?
+- When in doubt, **derive from Maxwell's equations** for the specific geometry, don't assume
+
+### Validation Requirement
+- Any decay model MUST be validated against:
+  1. Analytical solution for simplified geometry (e.g., dipole in free space)
+  2. Published experimental data for ME transducers where available
+  3. FEM simulation results if analytical solutions don't exist
+
+## Transfer Functions
+- Specify units explicitly in variable names or type hints (e.g., `distance_mm: float`)
+- Include frequency-dependent attenuation for tissue (conductivity σ ≈ 0.2-0.5 S/m for brain tissue)
+- Validate against known analytical solutions when possible
+
+## 3D Coordinate Systems
+- Use right-handed coordinate systems consistently
+- Document the origin convention (e.g., nasion, center of head)
+- Include transformation matrices when converting between coordinate frames
+
+## Constants
+- Define physical constants in a central `constants.py` module
+- Include uncertainty/tolerance where applicable
+- Reference literature sources in comments
+
+## Numerical Precision
+- Use `np.float64` for physics calculations by default
+- Be explicit about numerical stability concerns in iterative methods
+- Document acceptable error tolerances for approximations

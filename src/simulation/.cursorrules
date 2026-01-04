@@ -1,0 +1,15 @@
+# SIMULATION & DATA GENERATION RULES
+
+## 1. REPRODUCIBILITY IS PARAMOUNT
+- **ALWAYS** set a random seed (`np.random.seed(42)`) at the start of every simulation script.
+- Never use `time.time()` as a seed. We need deterministic chaos.
+- If generating a "Stochastic Cloud," save the generated coordinate matrix to `data/raw/` immediately.
+
+## 2. VOLUME CONSTRAINTS (Subsense Specific)
+- **Bounded Box:** All particles must exist strictly within the defined $1mm^3$ volume.
+- **Exclusion Zones:** Particles cannot overlap (collision check). Assume a particle radius of $100nm$ if not specified.
+- **Source Placement:** Neural sources must be placed *at least* $0.1mm$ away from the nearest sensor to avoid "Singularity Artifacts" (dividing by zero in the $1/r$ equation).
+
+## 3. OUTPUT FORMAT
+- Always save synthetic data as `.npy` (NumPy binary) for speed and precision.
+- Filenames must include the parameters: `cloud_N1000_seed42.npy`.
