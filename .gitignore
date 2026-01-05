@@ -44,3 +44,7 @@ desktop.ini
 # Project specific
 *.log
 
+# Large data files (regenerate via simulation scripts)
+data/raw/*.npy
+data/processed/*.png
+
