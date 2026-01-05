@@ -59,10 +59,11 @@ def generate_time_vector(
 
 def generate_pink_noise(n_samples: int, seed: int | None = None) -> np.ndarray:
     """
-    Generate pink noise (1/f noise) using the Voss-McCartney algorithm.
+    Generate pink noise (1/f noise) using FFT-based spectral shaping.
 
     Pink noise has equal energy per octave, with power spectral density
-    proportional to 1/f.
+    proportional to 1/f. This implementation creates true 1/f spectrum
+    by shaping white noise in the frequency domain.
 
     Parameters
     ----------
@@ -74,26 +75,50 @@ def generate_pink_noise(n_samples: int, seed: int | None = None) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Pink noise signal normalized to unit amplitude.
+        Pink noise signal (NOT normalized - caller should standardize).
     """
     if seed is not None:
         np.random.seed(seed)
 
-    # Generate white noise in frequency domain
-    white = np.fft.rfft(np.random.randn(n_samples))
+    # Generate white noise in time domain
+    white_noise = np.random.randn(n_samples)
 
-    # Create 1/f filter (avoid division by zero at DC)
+    # Transform to frequency domain
+    fft_white = np.fft.rfft(white_noise)
+
+    # Create frequency bins (Hz normalized by sample rate)
     freqs = np.fft.rfftfreq(n_samples)
-    freqs[0] = 1e-10  # Avoid division by zero
-    pink_filter = 1.0 / np.sqrt(freqs)
 
-    # Apply filter and transform back
-    pink = np.fft.irfft(white * pink_filter, n=n_samples)
+    # Create 1/f filter: PSD ∝ 1/f means amplitude ∝ 1/sqrt(f)
+    # Handle DC component (f=0) by setting to 0 to remove DC offset
+    pink_filter = np.zeros_like(freqs)
+    nonzero_mask = freqs > 0
+    pink_filter[nonzero_mask] = 1.0 / np.sqrt(freqs[nonzero_mask])
 
-    # Normalize to unit amplitude
-    pink = pink / np.max(np.abs(pink))
+    # Apply filter in frequency domain
+    fft_pink = fft_white * pink_filter
+
+    # Transform back to time domain
+    pink = np.fft.irfft(fft_pink, n=n_samples)
 
     return pink
+
+
+def standardize_signal(signal: np.ndarray) -> np.ndarray:
+    """
+    Standardize a signal to have zero mean and unit variance.
+
+    Parameters
+    ----------
+    signal : np.ndarray
+        Input signal.
+
+    Returns
+    -------
+    np.ndarray
+        Standardized signal with mean=0 and std=1.
+    """
+    return (signal - np.mean(signal)) / np.std(signal)
 
 
 def generate_source_waveforms(
@@ -102,6 +127,10 @@ def generate_source_waveforms(
 ) -> np.ndarray:
     """
     Generate source waveforms for all 3 neural sources.
+
+    All sources are standardized to unit variance (σ=1) before mixing
+    to ensure equal contribution to the lead field mixing and enable
+    proper SNR calculation.
 
     Parameters
     ----------
@@ -114,9 +143,11 @@ def generate_source_waveforms(
     -------
     np.ndarray
         Source waveforms with shape (n_sources=3, n_samples).
-        Row 0: Source A - 10 Hz sine (Alpha)
-        Row 1: Source B - 20 Hz sine (Beta)
-        Row 2: Source C - Pink noise (1/f)
+        Row 0: Source A - 10 Hz sine (Alpha), standardized
+        Row 1: Source B - 20 Hz sine (Beta), standardized
+        Row 2: Source C - Pink noise (1/f), standardized
+
+        All sources have mean=0 and std=1.
     """
     n_samples = len(time_vector)
 
@@ -129,8 +160,16 @@ def generate_source_waveforms(
     # Source C: Pink noise (1/f background activity)
     source_c = generate_pink_noise(n_samples, seed=seed + 100)
 
+    # CRITICAL: Standardize ALL sources to unit variance (mean=0, std=1)
+    # This ensures:
+    # 1. Equal "power" contribution from each source before lead field mixing
+    # 2. Pink noise is visible alongside sinusoidal sources
+    # 3. SNR calculation is mathematically well-defined
+    source_a = standardize_signal(source_a)
+    source_b = standardize_signal(source_b)
+    source_c = standardize_signal(source_c)
+
     # Stack into (n_sources, n_samples) matrix
-    # All are already normalized to unit amplitude (sine waves are [-1, 1])
     source_waveforms = np.vstack([source_a, source_b, source_c])
 
     return source_waveforms
@@ -140,29 +179,35 @@ def add_sensor_noise(
     clean_data: np.ndarray,
     snr: float = SNR_LEVEL,
     seed: int = DEFAULT_RANDOM_SEED,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Add Gaussian white noise to sensor data based on SNR.
 
     The noise level is scaled relative to the RMS power of the clean signal.
 
-    SNR Definition (linear):
-        SNR = signal_power / noise_power
-        noise_std = signal_rms / sqrt(SNR)
+    SNR Definition (power ratio, linear scale):
+        SNR = signal_power / noise_power = signal_rms² / noise_rms²
+
+    For SNR=5.0:
+        noise_power = signal_power / 5
+        noise_rms = signal_rms / sqrt(5) ≈ signal_rms / 2.236
 
     Parameters
     ----------
     clean_data : np.ndarray
         Clean sensor data with shape (n_sensors, n_samples).
     snr : float
-        Signal-to-noise ratio (linear scale, not dB).
+        Signal-to-noise ratio (linear power ratio, not dB).
+        SNR=5 means signal power is 5× noise power.
     seed : int
         Random seed for reproducibility.
 
     Returns
     -------
-    np.ndarray
+    noisy_data : np.ndarray
         Noisy sensor data with shape (n_sensors, n_samples).
+    noise : np.ndarray
+        The noise component (for SNR verification).
     """
     np.random.seed(seed + 200)
 
@@ -170,14 +215,15 @@ def add_sensor_noise(
     signal_rms = np.sqrt(np.mean(clean_data ** 2))
 
     # Compute noise standard deviation from SNR
-    # SNR = (signal_rms^2) / (noise_std^2)
-    # noise_std = signal_rms / sqrt(SNR)
+    # SNR = signal_power / noise_power = signal_rms² / noise_std²
+    # Solving for noise_std: noise_std = signal_rms / sqrt(SNR)
+    # This ensures: noise_power = noise_std² = signal_rms² / SNR = signal_power / SNR
     noise_std = signal_rms / np.sqrt(snr)
 
-    # Generate Gaussian white noise
+    # Generate Gaussian white noise with target standard deviation
     noise = np.random.randn(*clean_data.shape) * noise_std
 
-    return clean_data + noise
+    return clean_data + noise, noise
 
 
 def simulate_recording(
@@ -225,9 +271,15 @@ def simulate_recording(
 
     print(f"  Time vector: {n_samples} samples @ {sampling_rate_hz} Hz")
 
-    # Step 2: Generate source waveforms
+    # Step 2: Generate source waveforms (all standardized to unit variance)
     source_waveforms = generate_source_waveforms(time_vector, seed=seed)
     print(f"  Source waveforms: {source_waveforms.shape}")
+
+    # Verify source standardization
+    for i, name in enumerate(["A (10Hz)", "B (20Hz)", "C (Pink)"]):
+        src_std = np.std(source_waveforms[i])
+        src_mean = np.mean(source_waveforms[i])
+        print(f"    Source {name}: mean={src_mean:.2e}, std={src_std:.4f}")
 
     # Step 3: Compute lead field matrix
     lead_field, _ = compute_lead_field(sensors, sources)
@@ -241,8 +293,14 @@ def simulate_recording(
     print(f"  Clean data: {clean_data.shape}")
 
     # Step 5: Add sensor noise
-    noisy_data = add_sensor_noise(clean_data, snr=snr, seed=seed)
-    print(f"  Noisy data: {noisy_data.shape}, SNR={snr}")
+    noisy_data, noise = add_sensor_noise(clean_data, snr=snr, seed=seed)
+
+    # Verify actual SNR
+    signal_power = np.mean(clean_data ** 2)
+    noise_power = np.mean(noise ** 2)
+    actual_snr = signal_power / noise_power
+    print(f"  Noisy data: {noisy_data.shape}")
+    print(f"  SNR verification: target={snr:.2f}, actual={actual_snr:.4f}")
 
     return time_vector, source_waveforms, clean_data, noisy_data
 
