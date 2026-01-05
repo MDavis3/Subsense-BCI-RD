@@ -227,5 +227,114 @@ class TestCoordinateTransforms:
         np.testing.assert_array_almost_equal(coords, transformed)
 
 
+class TestPinkNoiseGeneration:
+    """Test pink noise generation and 1/f spectrum verification."""
+
+    def test_pink_noise_length(self) -> None:
+        """Pink noise output should match requested length."""
+        from subsense_bci.simulation.time_series import generate_pink_noise
+
+        n_samples = 1000
+        pink = generate_pink_noise(n_samples, seed=42)
+
+        assert len(pink) == n_samples
+
+    def test_pink_noise_reproducibility(self) -> None:
+        """Same seed should produce identical output."""
+        from subsense_bci.simulation.time_series import generate_pink_noise
+
+        pink1 = generate_pink_noise(1000, seed=123)
+        pink2 = generate_pink_noise(1000, seed=123)
+
+        np.testing.assert_array_equal(pink1, pink2)
+
+    def test_pink_noise_1f_spectrum(self) -> None:
+        """
+        Verify pink noise has 1/f power spectral density.
+
+        For pink noise: PSD(f) ∝ 1/f
+        In log-log space: log(PSD) = -1 * log(f) + const
+        So the slope should be approximately -1.
+        """
+        from subsense_bci.simulation.time_series import generate_pink_noise
+
+        # Generate long pink noise for accurate spectrum
+        n_samples = 10000
+        fs = 1000.0  # Hz
+        pink = generate_pink_noise(n_samples, seed=42)
+
+        # Compute power spectral density
+        fft = np.fft.rfft(pink)
+        psd = np.abs(fft) ** 2
+        freqs = np.fft.rfftfreq(n_samples, 1/fs)
+
+        # Fit slope in log-log space (exclude DC and very low frequencies)
+        valid_mask = freqs > 5  # Skip DC and very low freq
+        log_f = np.log10(freqs[valid_mask])
+        log_psd = np.log10(psd[valid_mask])
+
+        # Linear regression to find slope
+        slope, _ = np.polyfit(log_f, log_psd, 1)
+
+        # Slope should be close to -1 for 1/f noise (tolerance for finite samples)
+        assert -1.5 < slope < -0.5, f"Slope {slope:.2f} not in expected range for 1/f noise"
+
+
+class TestSourceNormalization:
+    """Test source waveform standardization."""
+
+    def test_sources_unit_variance(self) -> None:
+        """All sources should have unit variance after standardization."""
+        from subsense_bci.simulation.time_series import (
+            generate_time_vector,
+            generate_source_waveforms,
+        )
+
+        time_vector = generate_time_vector(duration_sec=2.0, sampling_rate_hz=1000.0)
+        sources = generate_source_waveforms(time_vector, seed=42)
+
+        for i in range(3):
+            std = np.std(sources[i])
+            assert np.isclose(std, 1.0, atol=1e-10), f"Source {i} std={std:.6f}, expected 1.0"
+
+    def test_sources_zero_mean(self) -> None:
+        """All sources should have zero mean after standardization."""
+        from subsense_bci.simulation.time_series import (
+            generate_time_vector,
+            generate_source_waveforms,
+        )
+
+        time_vector = generate_time_vector(duration_sec=2.0, sampling_rate_hz=1000.0)
+        sources = generate_source_waveforms(time_vector, seed=42)
+
+        for i in range(3):
+            mean = np.mean(sources[i])
+            assert np.isclose(mean, 0.0, atol=1e-10), f"Source {i} mean={mean:.6e}, expected 0.0"
+
+
+class TestSNRComputation:
+    """Test SNR calculation and noise addition."""
+
+    def test_snr_accuracy(self) -> None:
+        """Verify noise is added with correct SNR."""
+        from subsense_bci.simulation.time_series import add_sensor_noise
+
+        # Create clean signal
+        np.random.seed(42)
+        clean_data = np.random.randn(100, 1000)
+
+        target_snr = 5.0
+        noisy_data, noise = add_sensor_noise(clean_data, snr=target_snr, seed=42)
+
+        # Compute actual SNR
+        signal_power = np.mean(clean_data ** 2)
+        noise_power = np.mean(noise ** 2)
+        actual_snr = signal_power / noise_power
+
+        # Should be very close to target
+        assert np.isclose(actual_snr, target_snr, rtol=0.01), \
+            f"Actual SNR {actual_snr:.4f} != target {target_snr}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
