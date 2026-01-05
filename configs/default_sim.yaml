@@ -57,6 +57,25 @@ unmixing:
   ica_random_state: 42
 
 # -----------------------------------------------------------------------------
+# Phase 4: Real-Time Decoding Parameters
+# -----------------------------------------------------------------------------
+realtime:
+  # Chunk size in milliseconds
+  # Trade-off: Smaller = lower latency but less accurate
+  #            Larger = more accurate but higher latency
+  # 100ms is chosen as a balance (~10 samples of 10Hz alpha wave per chunk)
+  chunk_size_ms: 100.0
+
+  # Rolling display window in milliseconds
+  window_ms: 500.0
+
+  # Number of sensors to display in real-time dashboard (for performance)
+  display_sensors: 50
+
+  # Animation update interval in milliseconds
+  animation_interval_ms: 50
+
+# -----------------------------------------------------------------------------
 # Physics Constants (generally should not be modified)
 # -----------------------------------------------------------------------------
 physics:
