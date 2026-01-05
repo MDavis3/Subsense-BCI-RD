@@ -14,7 +14,6 @@ Run from project root:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -22,62 +21,24 @@ import matplotlib.gridspec as gridspec
 from matplotlib.patches import FancyBboxPatch
 import numpy as np
 
-# Add src to path for imports
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root / "src"))
+from subsense_bci.physics.constants import SAMPLING_RATE_HZ, DURATION_SEC, SNR_LEVEL
+from subsense_bci.visualization.theme import COLORS, setup_axis_style
 
-try:
-    from physics.constants import SAMPLING_RATE_HZ, DURATION_SEC, SNR_LEVEL  # type: ignore[import-not-found]
-except ImportError:
-    from src.physics.constants import SAMPLING_RATE_HZ, DURATION_SEC, SNR_LEVEL
 
-# =============================================================================
-# SUBSENSE COLOR PALETTE (consistent with Phase 1)
-# =============================================================================
-COLORS = {
-    "background": "#0f0f0f",
-    "panel_bg": "#12121a",
-    "nanotech_cyan": "#00FFFF",
-    "warning_red": "#FF3333",
-    "safety_yellow": "#FFD700",
-    "grid_line": "#1a1a2e",
-    "text_primary": "#E0E0E0",
-    "text_secondary": "#808080",
-    "text_accent": "#00FFFF",
-    "success_green": "#00FF88",
-    "source_a": "#FF6B6B",  # Alpha - warm red
-    "source_b": "#4ECDC4",  # Beta - teal
-    "source_c": "#95E1D3",  # Pink noise - soft green
-}
+def get_project_root() -> Path:
+    """Get project root directory."""
+    return Path(__file__).parent.parent
 
 
 def load_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load simulation data from disk."""
-    data_dir = project_root / "data" / "raw"
+    data_dir = get_project_root() / "data" / "raw"
 
     time_vector = np.load(data_dir / "time_vector.npy")
     source_waveforms = np.load(data_dir / "source_waveforms.npy")
     recording = np.load(data_dir / "recording_simulation.npy")
 
     return time_vector, source_waveforms, recording
-
-
-def setup_axis_style(ax, title: str) -> None:
-    """Apply consistent dark styling to an axis."""
-    ax.set_facecolor(COLORS["panel_bg"])
-    ax.set_title(
-        title,
-        color=COLORS["text_accent"],
-        fontsize=11,
-        fontweight="bold",
-        fontfamily="monospace",
-        pad=10,
-    )
-    ax.tick_params(colors=COLORS["text_secondary"], labelsize=8)
-    ax.grid(True, alpha=0.2, color=COLORS["grid_line"])
-
-    for spine in ax.spines.values():
-        spine.set_color(COLORS["grid_line"])
 
 
 def plot_source_waveforms(
@@ -323,7 +284,7 @@ def main() -> None:
 
     # Save
     print("  [3/3] Saving dashboard...")
-    output_dir = project_root / "data" / "processed"
+    output_dir = get_project_root() / "data" / "processed"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "phase2_signals.png"
     plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor=COLORS["background"])

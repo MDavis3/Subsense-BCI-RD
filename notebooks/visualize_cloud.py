@@ -17,7 +17,6 @@ Run from project root:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -26,42 +25,27 @@ from matplotlib.patches import FancyBboxPatch
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-# Add src to path for imports
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root / "src"))
-
-from physics.constants import (
+from subsense_bci.physics.constants import (
     BRAIN_CONDUCTIVITY_S_M,
     SINGULARITY_THRESHOLD_MM,
     CLOUD_VOLUME_SIDE_MM,
 )
-from physics.transfer_function import (
+from subsense_bci.physics.transfer_function import (
     compute_lead_field,
     compute_distance_matrix,
     validate_lead_field,
 )
+from subsense_bci.visualization.theme import COLORS, apply_dark_theme
 
-# =============================================================================
-# SUBSENSE COLOR PALETTE
-# =============================================================================
-COLORS = {
-    "background": "#0f0f0f",
-    "panel_bg": "#12121a",
-    "nanotech_cyan": "#00FFFF",
-    "warning_red": "#FF3333",
-    "safety_yellow": "#FFD700",
-    "grid_line": "#1a1a2e",
-    "text_primary": "#E0E0E0",
-    "text_secondary": "#808080",
-    "text_accent": "#00FFFF",
-    "glow_red": "#FF6666",
-    "success_green": "#00FF88",
-}
+
+def get_project_root() -> Path:
+    """Get project root directory."""
+    return Path(__file__).parent.parent
 
 
 def load_data() -> tuple[np.ndarray, np.ndarray]:
     """Load sensor cloud and source data from disk."""
-    data_dir = project_root / "data" / "raw"
+    data_dir = get_project_root() / "data" / "raw"
     sensors = np.load(data_dir / "sensors_N10000_seed42.npy")
     sources = np.load(data_dir / "sources_3fixed.npy")
     return sensors, sources
@@ -603,7 +587,7 @@ def main() -> None:
     )
     
     # Save figure
-    output_dir = project_root / "data" / "processed"
+    output_dir = get_project_root() / "data" / "processed"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "phase1_dashboard.png"
     plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor=COLORS["background"])

@@ -480,5 +480,123 @@ Matched Sources (3×2000)
 
 ---
 
+### [2026-01-05] Infrastructure Hardening - Package Installation & Testing
+
+**Category**: Infrastructure
+**Files Modified**:
+- `pyproject.toml` (new) - Modern Python packaging configuration
+- `requirements.txt` (updated) - Added scikit-learn, pyyaml
+- `configs/default_sim.yaml` (new) - Centralized simulation parameters
+- `src/config.py` (new) - YAML configuration loader
+- `tests/test_physics.py` (rewritten) - Comprehensive physics validation tests
+- All source files - Removed `sys.path.insert` hacks, standardized imports
+
+**Problem/Goal**:
+The codebase relied on `sys.path.insert` hacks for imports, making it fragile and
+non-portable. Before Phase 4 (real-time processing), the infrastructure needed
+hardening for proper dependency management and testing.
+
+**Approach**:
+
+*1. Modern Python Packaging (pyproject.toml)*
+Migrated from ad-hoc imports to proper editable installation:
+
+```bash
+pip install -e .
+```
+
+Package name: `subsense-bci` (import as `subsense_bci`)
+
+All modules now use absolute imports:
+```python
+from subsense_bci.physics.constants import SNR_LEVEL
+from subsense_bci.filtering.unmixing import unmix_sources
+```
+
+*2. Centralized Configuration (YAML)*
+Created `configs/default_sim.yaml` containing all tunable parameters:
+
+```yaml
+cloud:
+  sensor_count: 10000
+  random_seed: 42
+temporal:
+  sampling_rate_hz: 1000.0
+  snr_level: 5.0
+unmixing:
+  pca_variance_threshold: 0.999
+```
+
+Configuration loader (`src/config.py`) provides:
+- `load_config()` - Load from YAML with fallback to constants
+- `get_project_root()` - Reliable project root detection
+
+*3. Physics Validation Tests*
+Comprehensive pytest suite validating:
+- Constants are in physiologically valid ranges
+- Lead field follows exact 1/r decay law
+- Singularity clamping works correctly
+- No infinities or NaNs in any computation
+- Distance matrix correctness (3-4-5 triangle test)
+
+**Why This Approach**:
+
+1. **pyproject.toml over setup.py**: Modern standard (PEP 517/518), better IDE support,
+   simpler configuration. Supports optional dependencies via `[dev]` and `[full]` extras.
+
+2. **YAML configuration**: Separates tunable parameters from code. Researchers can
+   experiment with different SNR levels or sensor counts without touching Python files.
+
+3. **Absolute imports**: `sys.path.insert` breaks in edge cases (pytest, installed mode,
+   different working directories). Proper package installation is the only robust solution.
+
+4. **Analytical tests**: Rather than just "smoke tests", the physics tests verify exact
+   mathematical relationships (1/r decay, symmetry, etc.).
+
+**Validation**:
+
+```bash
+# Install in editable mode
+pip install -e .
+
+# Run tests
+pytest tests/ -v
+
+# All tests should pass:
+# - test_conductivity_ranges
+# - test_lead_field_1_over_r_decay
+# - test_singularity_clamping
+# - test_no_infinities_or_nans
+# - test_symmetry_equal_distances
+# ... (15+ tests)
+```
+
+**Project Structure After Hardening**:
+```
+subsense-bci-rd/
+├── pyproject.toml          # Package configuration
+├── requirements.txt        # Dependencies
+├── configs/
+│   └── default_sim.yaml    # Simulation parameters
+├── src/
+│   ├── __init__.py         # subsense_bci package
+│   ├── config.py           # Configuration loader
+│   ├── physics/
+│   ├── filtering/
+│   └── simulation/
+├── tests/
+│   └── test_physics.py     # Physics validation
+└── notebooks/
+```
+
+**References**:
+- PEP 517 - Build system interface
+- PEP 518 - pyproject.toml specification
+- pytest documentation - https://docs.pytest.org
+
+**Status**: ✅ Infrastructure HARDENED — Ready for Phase 4
+
+---
+
 <!-- Add new entries above this line -->
 

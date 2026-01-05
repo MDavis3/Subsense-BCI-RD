@@ -18,10 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-# Import constants from physics module
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from physics.constants import (
+from subsense_bci.physics.constants import (
     CLOUD_VOLUME_SIDE_MM,
     DEFAULT_SENSOR_COUNT,
     DEFAULT_RANDOM_SEED,
@@ -135,6 +132,11 @@ def load_sensor_cloud(filepath: Path | str) -> np.ndarray:
     return np.load(filepath)
 
 
+def get_project_root() -> Path:
+    """Get project root directory."""
+    return Path(__file__).parent.parent.parent.parent
+
+
 def main() -> None:
     """Generate and save the default sensor cloud."""
     print(f"Generating sensor cloud: N={DEFAULT_SENSOR_COUNT}, seed={DEFAULT_RANDOM_SEED}")
@@ -146,8 +148,7 @@ def main() -> None:
     print(f"  Mean: {sensors.mean(axis=0)}")
 
     # Determine output directory relative to project root
-    project_root = Path(__file__).parent.parent.parent
-    output_dir = project_root / "data" / "raw"
+    output_dir = get_project_root() / "data" / "raw"
 
     filepath = save_sensor_cloud(
         sensors,

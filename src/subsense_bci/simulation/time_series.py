@@ -16,22 +16,22 @@ Forward Model:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
 
-# Add src to path for imports
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root / "src"))
-
-from physics.constants import (
+from subsense_bci.physics.constants import (
     SAMPLING_RATE_HZ,
     DURATION_SEC,
     SNR_LEVEL,
     DEFAULT_RANDOM_SEED,
 )
-from physics.transfer_function import compute_lead_field
+from subsense_bci.physics.transfer_function import compute_lead_field
+
+
+def get_project_root() -> Path:
+    """Get project root directory."""
+    return Path(__file__).parent.parent.parent.parent
 
 
 def generate_time_vector(
@@ -307,7 +307,7 @@ def simulate_recording(
 
 def load_phase1_data() -> tuple[np.ndarray, np.ndarray]:
     """Load sensor and source data from Phase 1."""
-    data_dir = project_root / "data" / "raw"
+    data_dir = get_project_root() / "data" / "raw"
     sensors = np.load(data_dir / "sensors_N10000_seed42.npy")
     sources = np.load(data_dir / "sources_3fixed.npy")
     return sensors, sources
@@ -339,7 +339,7 @@ def save_simulation_results(
         Paths to saved files.
     """
     if output_dir is None:
-        output_dir = project_root / "data" / "raw"
+        output_dir = get_project_root() / "data" / "raw"
     else:
         output_dir = Path(output_dir)
 

@@ -14,10 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-# Import constants from physics module
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from physics.constants import CLOUD_VOLUME_SIDE_MM
+from subsense_bci.physics.constants import CLOUD_VOLUME_SIDE_MM
 
 
 # =============================================================================

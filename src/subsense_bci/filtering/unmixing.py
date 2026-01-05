@@ -18,7 +18,6 @@ Mathematical Model:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -28,9 +27,10 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.decomposition import PCA, FastICA
 from sklearn.preprocessing import StandardScaler
 
-# Add src to path for imports
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root / "src"))
+
+def get_project_root() -> Path:
+    """Get project root directory."""
+    return Path(__file__).parent.parent.parent.parent
 
 
 @dataclass
@@ -69,7 +69,7 @@ def load_phase2_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     time_vector : np.ndarray
         Time vector in seconds, shape (n_samples,).
     """
-    data_dir = project_root / "data" / "raw"
+    data_dir = get_project_root() / "data" / "raw"
 
     recording = np.load(data_dir / "recording_simulation.npy")
     ground_truth = np.load(data_dir / "source_waveforms.npy")
@@ -317,7 +317,7 @@ def save_unmixing_results(
         Paths to saved files.
     """
     if output_dir is None:
-        output_dir = project_root / "data" / "processed"
+        output_dir = get_project_root() / "data" / "processed"
     else:
         output_dir = Path(output_dir)
 

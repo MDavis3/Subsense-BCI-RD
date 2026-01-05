@@ -14,7 +14,6 @@ Run from project root:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,54 +22,14 @@ from matplotlib.patches import FancyBboxPatch
 import numpy as np
 from scipy import signal as scipy_signal
 
-# Add src to path for imports
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root / "src"))
-
-try:
-    from physics.constants import SAMPLING_RATE_HZ  # type: ignore[import-not-found]
-    from filtering.unmixing import load_phase2_data, unmix_sources, UnmixingResult  # type: ignore[import-not-found]
-except ImportError:
-    from src.physics.constants import SAMPLING_RATE_HZ
-    from src.filtering.unmixing import load_phase2_data, unmix_sources, UnmixingResult
-
-# =============================================================================
-# SUBSENSE COLOR PALETTE (consistent with Phase 1 & 2)
-# =============================================================================
-COLORS = {
-    "background": "#0f0f0f",
-    "panel_bg": "#12121a",
-    "nanotech_cyan": "#00FFFF",
-    "warning_red": "#FF3333",
-    "safety_yellow": "#FFD700",
-    "grid_line": "#1a1a2e",
-    "text_primary": "#E0E0E0",
-    "text_secondary": "#808080",
-    "text_accent": "#00FFFF",
-    "success_green": "#00FF88",
-    "source_a": "#FF6B6B",  # Alpha - warm red
-    "source_b": "#4ECDC4",  # Beta - teal
-    "source_c": "#95E1D3",  # Pink noise - soft green
-    "recovered": "#FFD93D",  # Recovered signal - gold
-}
+from subsense_bci.physics.constants import SAMPLING_RATE_HZ
+from subsense_bci.filtering.unmixing import load_phase2_data, unmix_sources, UnmixingResult
+from subsense_bci.visualization.theme import COLORS, setup_axis_style
 
 
-def setup_axis_style(ax, title: str) -> None:
-    """Apply consistent dark styling to an axis."""
-    ax.set_facecolor(COLORS["panel_bg"])
-    ax.set_title(
-        title,
-        color=COLORS["text_accent"],
-        fontsize=10,
-        fontweight="bold",
-        fontfamily="monospace",
-        pad=8,
-    )
-    ax.tick_params(colors=COLORS["text_secondary"], labelsize=8)
-    ax.grid(True, alpha=0.2, color=COLORS["grid_line"])
-
-    for spine in ax.spines.values():
-        spine.set_color(COLORS["grid_line"])
+def get_project_root() -> Path:
+    """Get project root directory."""
+    return Path(__file__).parent.parent
 
 
 def plot_source_comparison(
@@ -413,7 +372,7 @@ def main() -> None:
 
     # Save
     print("  [3/4] Saving dashboard...")
-    output_dir = project_root / "data" / "processed"
+    output_dir = get_project_root() / "data" / "processed"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "phase3_unmixing.png"
     plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor=COLORS["background"])

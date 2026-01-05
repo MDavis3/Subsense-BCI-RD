@@ -1,0 +1,69 @@
+# Subsense BCI Simulation Configuration
+# =======================================
+# This file contains tunable simulation parameters.
+# Modify these values to experiment with different scenarios.
+#
+# Usage:
+#   from subsense_bci.config import load_config
+#   cfg = load_config()  # Loads this file, falls back to constants if missing
+
+# -----------------------------------------------------------------------------
+# Phase 1: Nanoparticle Cloud Parameters
+# -----------------------------------------------------------------------------
+cloud:
+  # Cubic domain extent in mm (centered at origin: [-side/2, +side/2])
+  volume_side_mm: 1.0
+
+  # Default number of ME nanoparticle sensors
+  sensor_count: 10000
+
+  # Random seed for reproducibility
+  random_seed: 42
+
+  # Singularity threshold: sensors closer than this to a source get clamped
+  singularity_threshold_mm: 0.05
+
+  # Nanoparticle radius in nanometers (for future collision detection)
+  particle_radius_nm: 100.0
+
+# -----------------------------------------------------------------------------
+# Phase 2: Temporal Dynamics Parameters
+# -----------------------------------------------------------------------------
+temporal:
+  # Sampling rate in Hz (1 kHz = Nyquist for ~500 Hz signals)
+  sampling_rate_hz: 1000.0
+
+  # Simulation duration in seconds
+  duration_sec: 2.0
+
+  # Signal-to-Noise Ratio (linear scale, not dB)
+  # SNR=5 means signal power is 5x noise power (~7 dB)
+  snr_level: 5.0
+
+# -----------------------------------------------------------------------------
+# Phase 3: Source Separation (PCA/ICA) Parameters
+# -----------------------------------------------------------------------------
+unmixing:
+  # PCA variance threshold (0.999 = keep 99.9% of variance)
+  pca_variance_threshold: 0.999
+
+  # Number of independent sources to recover
+  n_sources: 3
+
+  # FastICA maximum iterations
+  ica_max_iter: 1000
+
+  # FastICA random seed
+  ica_random_state: 42
+
+# -----------------------------------------------------------------------------
+# Physics Constants (generally should not be modified)
+# -----------------------------------------------------------------------------
+physics:
+  # Brain tissue conductivity in S/m (Gabriel et al., 1996)
+  brain_conductivity_s_m: 0.33
+
+  # Source waveform frequencies in Hz
+  source_frequencies_hz:
+    alpha: 10.0
+    beta: 20.0
