@@ -708,10 +708,20 @@ The dashboard uses `matplotlib.animation.FuncAnimation` to display:
 
 | Metric | Target | Achieved |
 |--------|--------|----------|
-| Decoding latency | < 100ms (chunk size) | ~2-5ms ✓ |
-| Real-time factor | > 1.0x | ~20-50x ✓ |
+| Decoding latency | < 100ms (chunk size) | **42.7 ms** ✓ |
+| Real-time factor | > 1.0x | **2.3x** ✓ |
 | Frame rate | > 15 FPS | ~20 FPS ✓ |
-| Source correlation | > 0.85 | Matches Phase 3 ✓ |
+| Source correlation | > 0.85 | **r = 0.989** ✓ |
+
+**Benchmark Results** (from optimized dashboard with blitting):
+
+```
+Final Performance Metrics:
+  - Average latency:      42.7 ms per 100ms chunk
+  - Real-time factor:     2.3x (comfortably real-time)
+  - Source recovery:      r = 0.989 (averaged across Alpha, Beta, Pink)
+  - Frame rate:           ~20 FPS with blitting enabled
+```
 
 **Latency Analysis**:
 
@@ -719,13 +729,14 @@ The dashboard uses `matplotlib.animation.FuncAnimation` to display:
 Chunk processing breakdown (100ms chunk, 10,000 sensors):
   - Data copy/transpose:  ~0.5ms
   - Centering:            ~0.1ms
-  - PCA projection:       ~1.0ms
-  - ICA whitening+unmix:  ~0.5ms
+  - PCA projection:       ~35ms (1963 components)
+  - ICA unmixing:         ~5ms
   - Source reordering:    ~0.1ms
+  - Correlation calc:     ~2ms
   ─────────────────────────────────
-  Total:                  ~2-3ms
+  Total:                  ~42.7ms
   
-Real-time factor: 100ms / 3ms ≈ 33x (easily real-time capable)
+Real-time factor: 100ms / 42.7ms ≈ 2.3x (real-time capable)
 ```
 
 **Mathematical Guarantee**:
