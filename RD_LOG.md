@@ -1,7 +1,7 @@
 # Subsense BCI R&D Log
 
 ## ⚠️ Active Physical Assumptions (Living Document)
-*Last Updated: 2026-01-04*
+*Last Updated: 2026-01-05*
 
 1. **Volume Conductor**: Homogeneous isotropic medium ($\sigma = 0.33 \text{ S/m}$).
 2. **Sensor Behavior**: Point-source potential receiver (Voltage $\propto 1/r$).
@@ -188,6 +188,99 @@ Phase 1 implementation has been verified through both analytical and visual vali
    within the 1 mm³ domain with no clustering artifacts.
 
 **Status**: ✅ Phase 1 COMPLETE — Ready for Phase 2 (Source Localization / Inverse Problem)
+
+---
+
+### [2026-01-04] Phase 2: Temporal Dynamics and Noise
+
+**Category**: Simulation | Physics
+**Files Modified**:
+- `src/physics/constants.py` (added temporal parameters)
+- `src/simulation/time_series.py` (new)
+- `notebooks/visualize_signals.py` (new)
+- `data/raw/time_vector.npy` (generated)
+- `data/raw/source_waveforms.npy` (generated)
+- `data/raw/recording_simulation.npy` (generated)
+
+**Problem/Goal**:
+Create time-domain simulation to verify that the forward model correctly mixes
+frequency-separated neural sources. This establishes the "ground truth" for
+Phase 3 source separation (ICA/blind source separation).
+
+**Approach**:
+
+*1. Source Waveform Generation*
+Three neurophysiologically-inspired sources:
+- **Source A**: 10 Hz sine wave (Alpha band) — resting state / relaxation
+- **Source B**: 20 Hz sine wave (Beta band) — motor planning / active cognition
+- **Source C**: Pink noise (1/f) — broadband background neural activity
+
+All sources normalized to unit amplitude before mixing.
+
+*2. Forward Model*
+The observed sensor data follows the linear mixing model:
+
+$$X(t) = L \cdot S(t) + N(t)$$
+
+where:
+- $X(t)$ = sensor observations, shape $(N_{sensors}, N_{samples})$
+- $L$ = lead field matrix from Phase 1, shape $(N_{sensors}, N_{sources})$
+- $S(t)$ = source waveforms, shape $(N_{sources}, N_{samples})$
+- $N(t)$ = additive sensor noise
+
+*3. Noise Model*
+Gaussian white noise scaled to achieve target SNR:
+
+$$\sigma_{noise} = \frac{RMS(X_{clean})}{\sqrt{SNR}}$$
+
+where $SNR = 5.0$ (linear scale, not dB).
+
+*4. Simulation Parameters*
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Sampling rate | 1000 Hz | Nyquist for gamma band (up to 200 Hz) |
+| Duration | 2.0 sec | Sufficient for frequency resolution |
+| SNR | 5.0 | Moderate noise for realistic challenge |
+
+**Why This Approach**:
+
+1. **Sinusoidal sources**: Clean frequency separation enables spectral validation.
+   If mixing is correct, sensor signals should contain both 10 Hz and 20 Hz
+   components with amplitudes weighted by lead field values.
+
+2. **Pink noise source**: Adds realistic broadband activity. The 1/f spectral
+   characteristic matches empirical observations of resting-state neural signals.
+
+3. **Linear SNR (not dB)**: Simplifies noise scaling math. SNR=5 means signal
+   power is 5× noise power, equivalent to ~7 dB.
+
+4. **No temporal filtering**: Raw simulation without bandpass filtering preserves
+   all frequency content for downstream analysis.
+
+**Validation**:
+
+| Check | Expected | Verified |
+|-------|----------|----------|
+| Time vector length | 2000 samples | ✓ |
+| Recording shape | (10000, 2000) | ✓ |
+| Measured SNR | ~5.0 | ✓ |
+| Source A frequency | 10 Hz peak | Visual ✓ |
+| Source B frequency | 20 Hz peak | Visual ✓ |
+| Sensor mixing | Visible superposition | Visual ✓ |
+
+**Visual Validation**:
+The `phase2_signals.png` dashboard shows:
+- Top panel: Clean source waveforms with distinct frequencies
+- Bottom panel: Noisy mixed sensor signals showing superposition of all sources
+
+The sensor signals are visibly "messier" than the clean sources, demonstrating
+successful mixing and noise injection.
+
+**References**:
+- Hyvärinen & Oja, "Independent Component Analysis" (2000) — ICA theory
+- Makeig et al., "Mining event-related brain dynamics" (2004) — EEG source separation
+
+**Status**: ✅ Phase 2 COMPLETE — Ready for Phase 3 (Source Separation / ICA)
 
 ---
 

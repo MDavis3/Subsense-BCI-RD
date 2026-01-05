@@ -55,3 +55,14 @@ DEFAULT_RANDOM_SEED: int = 42
 # Particle parameters (for collision checking if needed)
 PARTICLE_RADIUS_NM: float = 100.0  # Assumed nanoparticle radius
 
+# =============================================================================
+# Phase 2 Simulation Parameters - Temporal Dynamics
+# =============================================================================
+
+# Sampling and duration
+SAMPLING_RATE_HZ: float = 1000.0  # 1 kHz sampling rate
+DURATION_SEC: float = 2.0  # 2 seconds of simulated data
+
+# Noise parameters
+SNR_LEVEL: float = 5.0  # Signal-to-Noise Ratio (linear, not dB)
+
