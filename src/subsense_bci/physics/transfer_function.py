@@ -536,3 +536,251 @@ def compute_electric_lead_field(
     """
     return compute_lead_field(sensors, sources, conductivity, min_distance_mm)
 
+
+# =============================================================================
+# LeadFieldManager - Cached and Incremental Lead Field Computation
+# =============================================================================
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class LeadFieldManager:
+    """
+    Manages lead field computation with optional caching and incremental updates.
+
+    Wraps the pure lead field functions to provide:
+    1. Full recomputation (stateless)
+    2. Cached computation (returns cached if positions unchanged)
+    3. Incremental updates (recomputes only changed rows)
+
+    This is essential for Phase 5 hemodynamic simulation where sensors
+    drift due to cardiac pulsation, requiring efficient lead field updates.
+
+    Attributes
+    ----------
+    sources : np.ndarray
+        Neural source positions, shape (n_sources, 3) in mm.
+    use_me_physics : bool
+        If True, use ME round-trip model. If False, use simple 1/r.
+    tx_position : np.ndarray, optional
+        TX coil position for ME physics, shape (3,) in mm.
+    frequency_khz : float
+        Operating frequency for ME physics in kHz.
+    conductivity : float
+        Tissue conductivity in S/m.
+    min_distance_mm : float
+        Singularity threshold for distance clamping.
+
+    Examples
+    --------
+    >>> sources = np.array([[0.1, 0.0, 0.0], [0.2, 0.0, 0.0], [-0.1, 0.0, 0.0]])
+    >>> manager = LeadFieldManager(sources=sources, use_me_physics=False)
+    >>> sensors = np.random.randn(100, 3) * 0.5
+    >>> L1 = manager.compute(sensors)
+    >>> L2 = manager.compute_with_cache(sensors)  # Returns cached
+    >>> np.allclose(L1, L2)
+    True
+    """
+
+    sources: np.ndarray
+    use_me_physics: bool = True
+    tx_position: np.ndarray | None = None
+    frequency_khz: float = ME_RESONANT_FREQ_KHZ
+    conductivity: float = BRAIN_CONDUCTIVITY_S_M
+    min_distance_mm: float = SINGULARITY_THRESHOLD_MM
+
+    # Private cache fields (not exposed in __init__)
+    _cached_L: np.ndarray | None = field(default=None, init=False, repr=False)
+    _cached_positions: np.ndarray | None = field(default=None, init=False, repr=False)
+    _cached_metadata: dict | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate inputs."""
+        self.sources = np.asarray(self.sources, dtype=np.float64)
+        if self.sources.ndim != 2 or self.sources.shape[1] != 3:
+            raise ValueError(f"sources must have shape (M, 3), got {self.sources.shape}")
+
+        if self.tx_position is not None:
+            self.tx_position = np.asarray(self.tx_position, dtype=np.float64)
+
+    @property
+    def n_sources(self) -> int:
+        """Number of neural sources."""
+        return self.sources.shape[0]
+
+    @property
+    def is_cached(self) -> bool:
+        """Whether a cached lead field exists."""
+        return self._cached_L is not None
+
+    def compute(self, sensor_positions: np.ndarray) -> np.ndarray:
+        """
+        Compute lead field matrix (full recomputation, no caching).
+
+        Parameters
+        ----------
+        sensor_positions : np.ndarray
+            Sensor positions, shape (n_sensors, 3) in mm.
+
+        Returns
+        -------
+        np.ndarray
+            Lead field matrix, shape (n_sensors, n_sources).
+        """
+        sensor_positions = np.asarray(sensor_positions, dtype=np.float64)
+
+        if self.use_me_physics:
+            L, _ = compute_me_lead_field(
+                sensors=sensor_positions,
+                sources=self.sources,
+                tx_position=self.tx_position,
+                frequency_khz=self.frequency_khz,
+                conductivity=self.conductivity,
+                min_distance_mm=self.min_distance_mm,
+            )
+        else:
+            L, _ = compute_lead_field(
+                sensors=sensor_positions,
+                sources=self.sources,
+                conductivity=self.conductivity,
+                min_distance_mm=self.min_distance_mm,
+            )
+        return L
+
+    def compute_with_cache(
+        self,
+        sensor_positions: np.ndarray,
+        tolerance_mm: float = 1e-6,
+    ) -> np.ndarray:
+        """
+        Return cached lead field if positions unchanged, else recompute.
+
+        Useful when sensors are static or move infrequently. Avoids
+        redundant computation by comparing positions to cached values.
+
+        Parameters
+        ----------
+        sensor_positions : np.ndarray
+            Sensor positions, shape (n_sensors, 3) in mm.
+        tolerance_mm : float
+            Position tolerance for cache hit. Default is 1e-6 mm.
+
+        Returns
+        -------
+        np.ndarray
+            Lead field matrix, shape (n_sensors, n_sources).
+        """
+        sensor_positions = np.asarray(sensor_positions, dtype=np.float64)
+
+        # Check for cache hit
+        if (
+            self._cached_L is not None
+            and self._cached_positions is not None
+            and self._cached_positions.shape == sensor_positions.shape
+            and np.allclose(sensor_positions, self._cached_positions, atol=tolerance_mm)
+        ):
+            return self._cached_L
+
+        # Cache miss - recompute
+        self._cached_L = self.compute(sensor_positions)
+        self._cached_positions = sensor_positions.copy()
+        return self._cached_L
+
+    def update_rows(
+        self,
+        sensor_positions: np.ndarray,
+        changed_indices: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Incrementally update only changed rows of the lead field.
+
+        For hemodynamic drift where only some sensors move significantly,
+        this avoids recomputing the entire matrix. Only rows corresponding
+        to changed sensors are recomputed.
+
+        Parameters
+        ----------
+        sensor_positions : np.ndarray
+            Full sensor positions, shape (n_sensors, 3) in mm.
+        changed_indices : np.ndarray
+            Indices of sensors that have moved, shape (n_changed,).
+
+        Returns
+        -------
+        np.ndarray
+            Updated lead field matrix, shape (n_sensors, n_sources).
+
+        Notes
+        -----
+        If no cache exists, falls back to full computation.
+        For large numbers of changed sensors, full recompute may be faster.
+        """
+        sensor_positions = np.asarray(sensor_positions, dtype=np.float64)
+        changed_indices = np.asarray(changed_indices, dtype=np.intp)
+
+        # If no cache, do full computation
+        if self._cached_L is None or self._cached_positions is None:
+            return self.compute_with_cache(sensor_positions)
+
+        # If all sensors changed, do full recompute
+        if len(changed_indices) >= sensor_positions.shape[0]:
+            return self.compute_with_cache(sensor_positions)
+
+        # Incremental update: recompute only changed rows
+        for idx in changed_indices:
+            single_sensor = sensor_positions[idx : idx + 1]  # Shape (1, 3)
+
+            if self.use_me_physics:
+                L_row, _ = compute_me_lead_field(
+                    sensors=single_sensor,
+                    sources=self.sources,
+                    tx_position=self.tx_position,
+                    frequency_khz=self.frequency_khz,
+                    conductivity=self.conductivity,
+                    min_distance_mm=self.min_distance_mm,
+                )
+            else:
+                L_row, _ = compute_lead_field(
+                    sensors=single_sensor,
+                    sources=self.sources,
+                    conductivity=self.conductivity,
+                    min_distance_mm=self.min_distance_mm,
+                )
+            self._cached_L[idx] = L_row[0]
+
+        # Update cached positions
+        self._cached_positions = sensor_positions.copy()
+        return self._cached_L
+
+    def invalidate_cache(self) -> None:
+        """Clear cached lead field and positions."""
+        self._cached_L = None
+        self._cached_positions = None
+        self._cached_metadata = None
+
+    def get_cache_info(self) -> dict:
+        """
+        Get information about the current cache state.
+
+        Returns
+        -------
+        dict
+            Cache information including:
+            - is_cached: bool
+            - n_sensors: int or None
+            - n_sources: int
+        """
+        return {
+            "is_cached": self.is_cached,
+            "n_sensors": self._cached_L.shape[0] if self._cached_L is not None else None,
+            "n_sources": self.n_sources,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"LeadFieldManager(n_sources={self.n_sources}, "
+            f"use_me_physics={self.use_me_physics}, "
+            f"is_cached={self.is_cached})"
+        )
+

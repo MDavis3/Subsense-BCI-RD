@@ -127,11 +127,12 @@ def standardize_signal(signal: np.ndarray) -> np.ndarray:
 def generate_source_waveforms(
     time_vector: np.ndarray,
     seed: int = DEFAULT_RANDOM_SEED,
+    source_frequencies: dict | None = None,
 ) -> np.ndarray:
     """
     Generate source waveforms for all 3 neural sources.
 
-    All sources are standardized to unit variance (σ=1) before mixing
+    All sources are standardized to unit variance (sigma=1) before mixing
     to ensure equal contribution to the lead field mixing and enable
     proper SNR calculation.
 
@@ -141,24 +142,41 @@ def generate_source_waveforms(
         Time vector in seconds.
     seed : int
         Random seed for pink noise generation.
+    source_frequencies : dict, optional
+        Dictionary with source frequencies in Hz. Expected keys:
+        - "alpha": Frequency for source A (default: 10.0 Hz)
+        - "beta": Frequency for source B (default: 20.0 Hz)
+        If None, loads from config["physics"]["source_frequencies_hz"].
 
     Returns
     -------
     np.ndarray
         Source waveforms with shape (n_sources=3, n_samples).
-        Row 0: Source A - 10 Hz sine (Alpha), standardized
-        Row 1: Source B - 20 Hz sine (Beta), standardized
+        Row 0: Source A - Alpha sine wave, standardized
+        Row 1: Source B - Beta sine wave, standardized
         Row 2: Source C - Pink noise (1/f), standardized
 
         All sources have mean=0 and std=1.
     """
+    # Load frequencies from config if not provided
+    if source_frequencies is None:
+        from subsense_bci.config import load_config
+        config = load_config()
+        source_frequencies = config.get("physics", {}).get(
+            "source_frequencies_hz",
+            {"alpha": 10.0, "beta": 20.0}
+        )
+
+    alpha_freq = source_frequencies.get("alpha", 10.0)
+    beta_freq = source_frequencies.get("beta", 20.0)
+
     n_samples = len(time_vector)
 
-    # Source A: 10 Hz Alpha wave
-    source_a = np.sin(2 * np.pi * 10.0 * time_vector)
+    # Source A: Alpha wave
+    source_a = np.sin(2 * np.pi * alpha_freq * time_vector)
 
-    # Source B: 20 Hz Beta wave
-    source_b = np.sin(2 * np.pi * 20.0 * time_vector)
+    # Source B: Beta wave
+    source_b = np.sin(2 * np.pi * beta_freq * time_vector)
 
     # Source C: Pink noise (1/f background activity)
     source_c = generate_pink_noise(n_samples, seed=seed + 100)

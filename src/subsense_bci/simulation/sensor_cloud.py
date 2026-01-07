@@ -362,6 +362,127 @@ class SensorCloud:
             vessel_ids=vessel_ids,
         )
 
+    def move(self, displacement: np.ndarray) -> None:
+        """
+        Apply instantaneous displacement to baseline positions.
+
+        This modifies the baseline positions in-place, which affects all
+        future calls to get_positions_at_time(). Use for explicit position
+        manipulation beyond the sinusoidal drift model.
+
+        Parameters
+        ----------
+        displacement : np.ndarray
+            Displacement vector. Shape (3,) for uniform displacement applied
+            to all sensors, or (n_sensors, 3) for per-sensor displacement.
+
+        Raises
+        ------
+        ValueError
+            If displacement shape is incompatible with sensor cloud.
+
+        Examples
+        --------
+        >>> cloud = SensorCloud.from_uniform_cloud(n_sensors=100)
+        >>> cloud.move(np.array([0.1, 0.0, 0.0]))  # Shift all sensors +0.1mm in X
+        >>> cloud.positions[0, 0]  # X coordinate increased
+        """
+        displacement = np.asarray(displacement, dtype=np.float64)
+
+        if displacement.shape == (3,):
+            # Uniform displacement for all sensors
+            self.positions += displacement
+        elif displacement.shape == (self._n_sensors, 3):
+            # Per-sensor displacement
+            self.positions += displacement
+        else:
+            raise ValueError(
+                f"displacement must have shape (3,) or ({self._n_sensors}, 3), "
+                f"got {displacement.shape}"
+            )
+
+    def set_drift_parameters(
+        self,
+        drift_amplitude: float | np.ndarray | None = None,
+        drift_frequency_hz: float | None = None,
+        phase_offsets: np.ndarray | None = None,
+    ) -> None:
+        """
+        Update drift parameters dynamically without recreating the cloud.
+
+        Allows runtime modification of hemodynamic drift behavior for
+        adaptive simulation scenarios (e.g., varying heart rate).
+
+        Parameters
+        ----------
+        drift_amplitude : float or np.ndarray, optional
+            New drift amplitude. Scalar applies to all sensors uniformly.
+            Array must have shape (n_sensors,) or (n_sensors, 3).
+        drift_frequency_hz : float, optional
+            New cardiac frequency in Hz.
+        phase_offsets : np.ndarray, optional
+            New phase offsets, shape (n_sensors,).
+
+        Examples
+        --------
+        >>> cloud = SensorCloud.from_uniform_cloud(n_sensors=100)
+        >>> cloud.set_drift_parameters(drift_frequency_hz=1.5)  # Increase HR
+        >>> cloud.drift_frequency_hz
+        1.5
+        """
+        if drift_amplitude is not None:
+            if np.isscalar(drift_amplitude):
+                self.drift_amplitude = np.full(self._n_sensors, float(drift_amplitude))
+            else:
+                drift_amplitude = np.asarray(drift_amplitude, dtype=np.float64)
+                if drift_amplitude.shape[0] != self._n_sensors:
+                    raise ValueError(
+                        f"drift_amplitude must have {self._n_sensors} entries, "
+                        f"got {drift_amplitude.shape[0]}"
+                    )
+                self.drift_amplitude = drift_amplitude
+
+        if drift_frequency_hz is not None:
+            self.drift_frequency_hz = float(drift_frequency_hz)
+
+        if phase_offsets is not None:
+            phase_offsets = np.asarray(phase_offsets, dtype=np.float64)
+            if phase_offsets.shape[0] != self._n_sensors:
+                raise ValueError(
+                    f"phase_offsets must have {self._n_sensors} entries, "
+                    f"got {phase_offsets.shape[0]}"
+                )
+            self.phase_offsets = phase_offsets
+
+    def copy(self) -> "SensorCloud":
+        """
+        Create a deep copy of the sensor cloud.
+
+        Useful for creating modified variants without affecting the original,
+        e.g., testing different drift parameters or perturbations.
+
+        Returns
+        -------
+        SensorCloud
+            Deep copy with independent arrays.
+
+        Examples
+        --------
+        >>> cloud = SensorCloud.from_uniform_cloud(n_sensors=100)
+        >>> cloud_copy = cloud.copy()
+        >>> cloud_copy.move(np.array([0.1, 0.0, 0.0]))
+        >>> np.allclose(cloud.positions, cloud_copy.positions)
+        False
+        """
+        return SensorCloud(
+            positions=self.positions.copy(),
+            covariance=self.covariance.copy() if self.covariance is not None else None,
+            drift_amplitude=self.drift_amplitude.copy(),
+            drift_frequency_hz=self.drift_frequency_hz,
+            phase_offsets=self.phase_offsets.copy(),
+            vessel_ids=self.vessel_ids.copy() if self.vessel_ids is not None else None,
+        )
+
     def __len__(self) -> int:
         """Return number of sensors."""
         return self._n_sensors

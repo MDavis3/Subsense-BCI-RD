@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 from sklearn.decomposition import PCA, FastICA
@@ -32,6 +33,61 @@ from subsense_bci.filtering.unmixing import (
     match_sources,
 )
 from subsense_bci.config import load_config
+
+
+@runtime_checkable
+class PreProcessingHook(Protocol):
+    """
+    Protocol for pre-processing hooks in the decoding pipeline.
+
+    Pre-processing hooks are applied to each chunk before PCA/ICA decoding.
+    This enables runtime artifact rejection, filtering, or other signal
+    conditioning without modifying the core decoder logic.
+
+    Implementations must provide:
+    - process(): Apply the pre-processing to a chunk
+    - reset(): Reset any internal state (e.g., filter memory)
+
+    Examples
+    --------
+    >>> class MyFilter:
+    ...     def process(self, chunk, timestamp, reference=None):
+    ...         return chunk * 0.5  # Example: attenuate signal
+    ...     def reset(self):
+    ...         pass
+    >>> decoder = OnlineDecoder.from_phase3_data()
+    >>> decoder.pre_processor = MyFilter()
+    """
+
+    def process(
+        self,
+        chunk: np.ndarray,
+        timestamp: float,
+        reference: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Apply pre-processing to a chunk.
+
+        Parameters
+        ----------
+        chunk : np.ndarray
+            Input sensor data, shape (n_sensors, chunk_samples).
+        timestamp : float
+            Timestamp of chunk start in seconds.
+        reference : np.ndarray, optional
+            Reference signal for artifact rejection (e.g., PPG/ECG).
+            Shape (chunk_samples,) if provided.
+
+        Returns
+        -------
+        np.ndarray
+            Processed chunk with same shape as input.
+        """
+        ...
+
+    def reset(self) -> None:
+        """Reset internal state (e.g., filter memory)."""
+        ...
 
 
 def get_project_root() -> Path:
@@ -92,6 +148,7 @@ class OnlineDecoder:
         source_order: np.ndarray,
         sign_flips: np.ndarray,
         sampling_rate_hz: float = 1000.0,
+        pre_processor: PreProcessingHook | None = None,
     ) -> None:
         self.scaler = scaler
         self.pca = pca
@@ -99,15 +156,16 @@ class OnlineDecoder:
         self.source_order = source_order
         self.sign_flips = sign_flips
         self.sampling_rate_hz = sampling_rate_hz
-        
+        self.pre_processor = pre_processor
+
         # Precompute the combined sensor-to-source transformation
         # Full transform: sources = ((X - sensor_mean) @ PCA.T - ica_mean) @ ICA.T
         # We can precompute: combined = ICA.T @ PCA.T so sources = (X - means) @ combined
         # But ICA has its own mean subtraction, so we keep them separate
-        
+
         # Cache ICA mean for efficiency
         self._ica_mean = self.ica.mean_
-        
+
         # Statistics
         self._decode_count = 0
         self._total_latency_ms = 0.0
@@ -400,26 +458,35 @@ class OnlineDecoder:
         self,
         chunk: np.ndarray,
         timestamp: float = 0.0,
+        reference: np.ndarray | None = None,
     ) -> DecodingResult:
         """
         Decode a single chunk of sensor data.
-        
+
         Parameters
         ----------
         chunk : np.ndarray
             Sensor data chunk, shape (n_sensors, chunk_samples).
         timestamp : float
             Timestamp of chunk start in seconds.
-            
+        reference : np.ndarray, optional
+            Reference signal for pre-processing (e.g., PPG/ECG).
+            Shape (chunk_samples,) if provided. Only used if pre_processor
+            is configured.
+
         Returns
         -------
         DecodingResult
             Decoded sources and timing metrics.
         """
         start_time = time.perf_counter()
-        
+
         chunk_samples = chunk.shape[1]
-        
+
+        # Apply pre-processing if configured
+        if self.pre_processor is not None:
+            chunk = self.pre_processor.process(chunk, timestamp, reference)
+
         # Transpose for sklearn: (chunk_samples, n_sensors)
         X = chunk.T
         
@@ -493,39 +560,39 @@ class OnlineDecoder:
 def main() -> None:
     """Demo the OnlineDecoder with streaming data."""
     from subsense_bci.simulation.streamer import DataStreamer
-    
+
     print("=" * 60)
     print("  PHASE 4: OnlineDecoder Demo")
     print("=" * 60)
-    
+
     # Train decoder
     print("\n[1/2] Training decoder from Phase 3 data...")
     decoder = OnlineDecoder.from_phase3_data()
     print(f"\nDecoder ready: {decoder}")
-    
+
     # Stream and decode
     print("\n[2/2] Streaming and decoding...")
     streamer = DataStreamer()
-    
+
     chunk_size_ms = 100.0
     n_chunks = streamer.get_chunk_count(chunk_size_ms)
-    
+
     latencies = []
-    
-    for i, (chunk, timestamp) in enumerate(streamer.get_chunks(chunk_size_ms)):
-        result = decoder.decode(chunk, timestamp)
+
+    for i, packet in enumerate(streamer.get_chunks(chunk_size_ms)):
+        result = decoder.decode(packet.chunk, packet.timestamp, packet.reference)
         latencies.append(result.latency_ms)
-        
+
         if i < 5 or i == n_chunks - 1:
             print(
                 f"  [{i+1:3d}/{n_chunks}] "
-                f"t={timestamp:.3f}s | "
+                f"t={packet.timestamp:.3f}s | "
                 f"sources={result.sources.shape} | "
                 f"latency={result.latency_ms:.2f}ms"
             )
         elif i == 5:
             print("  ...")
-    
+
     # Summary
     print("\n" + "-" * 40)
     print("DECODING SUMMARY")
@@ -535,15 +602,15 @@ def main() -> None:
     print(f"  Average latency: {np.mean(latencies):.2f}ms")
     print(f"  Max latency: {np.max(latencies):.2f}ms")
     print(f"  Min latency: {np.min(latencies):.2f}ms")
-    
+
     realtime_ratio = chunk_size_ms / np.mean(latencies)
     print(f"  Real-time factor: {realtime_ratio:.1f}x (>{1.0:.1f}x required)")
-    
+
     if realtime_ratio > 1.0:
         print(f"\n  [OK] REAL-TIME CAPABLE")
     else:
         print(f"\n  [!] TOO SLOW FOR REAL-TIME (consider reducing PCA components)")
-    
+
     print("\n" + "=" * 60)
 
 

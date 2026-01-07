@@ -57,15 +57,17 @@ def get_default_config() -> dict[str, Any]:
     """
     # Import here to avoid circular imports
     from subsense_bci.physics.constants import (
+        BRAIN_CONDUCTIVITY_S_M,
+        CARDIAC_FREQUENCY_HZ,
         CLOUD_VOLUME_SIDE_MM,
-        DEFAULT_SENSOR_COUNT,
         DEFAULT_RANDOM_SEED,
-        SINGULARITY_THRESHOLD_MM,
+        DEFAULT_SENSOR_COUNT,
+        DURATION_SEC,
+        HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
         PARTICLE_RADIUS_NM,
         SAMPLING_RATE_HZ,
-        DURATION_SEC,
+        SINGULARITY_THRESHOLD_MM,
         SNR_LEVEL,
-        BRAIN_CONDUCTIVITY_S_M,
     )
 
     return {
@@ -86,6 +88,28 @@ def get_default_config() -> dict[str, Any]:
             "n_sources": 3,
             "ica_max_iter": 1000,
             "ica_random_state": 42,
+        },
+        "realtime": {
+            "chunk_size_ms": 100.0,
+            "window_ms": 500.0,
+            "display_sensors": 50,
+            "animation_interval_ms": 50,
+        },
+        "biology": {
+            "cardiac_pulse_active": True,
+            "vascular_distribution": False,
+            "hemodynamic": {
+                "drift_amplitude_mm": HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
+                "drift_frequency_hz": CARDIAC_FREQUENCY_HZ,
+                "phase_coherence": 0.2,
+            },
+            "artifact_rejection": {
+                "enabled": False,
+                "method": "rls",
+                "n_taps": 32,
+                "lambda_": 0.99,
+                "mu": 0.01,
+            },
         },
         "physics": {
             "brain_conductivity_s_m": BRAIN_CONDUCTIVITY_S_M,

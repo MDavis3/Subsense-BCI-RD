@@ -423,3 +423,149 @@ def compute_artifact_rejection_snr(
         "correlation_after": corr_after,
         "rejection_db": rejection_db,
     }
+
+
+@dataclass
+class AdaptiveFilterHook:
+    """
+    Pre-processing hook for online adaptive artifact rejection.
+
+    This class wraps LMS/RLS filters to provide chunk-by-chunk artifact
+    rejection that can be integrated into the OnlineDecoder pipeline.
+    Implements the PreProcessingHook protocol.
+
+    Filter states are maintained across chunks, allowing the adaptive
+    filters to continuously track and cancel time-varying artifacts.
+
+    Parameters
+    ----------
+    method : str
+        Filter method: 'lms' or 'rls'. Default is 'rls'.
+    n_taps : int
+        Number of filter taps. Default is 32.
+    mu : float
+        LMS step size. Default is 0.01.
+    lambda_ : float
+        RLS forgetting factor. Default is 0.99.
+
+    Attributes
+    ----------
+    filters : list
+        Per-channel filter instances (created lazily on first call).
+    n_channels : int
+        Number of channels (set on first call).
+
+    Examples
+    --------
+    >>> from subsense_bci.filtering.online_decoder import OnlineDecoder
+    >>> hook = AdaptiveFilterHook(method='rls', n_taps=32)
+    >>> decoder = OnlineDecoder.from_phase3_data()
+    >>> decoder.pre_processor = hook
+    >>> # Now decoder.decode() will apply artifact rejection automatically
+    """
+
+    method: str = "rls"
+    n_taps: int = 32
+    mu: float = 0.01
+    lambda_: float = 0.99
+    _filters: list = field(default_factory=list, repr=False)
+    _n_channels: int = field(default=0, repr=False)
+
+    def process(
+        self,
+        chunk: np.ndarray,
+        timestamp: float,
+        reference: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Apply adaptive filtering to a chunk.
+
+        If no reference signal is provided, returns the chunk unchanged.
+        On the first call, creates per-channel filter instances.
+
+        Parameters
+        ----------
+        chunk : np.ndarray
+            Input sensor data, shape (n_sensors, chunk_samples).
+        timestamp : float
+            Timestamp of chunk start in seconds (unused, for protocol compatibility).
+        reference : np.ndarray, optional
+            Reference signal (e.g., PPG/ECG), shape (chunk_samples,).
+
+        Returns
+        -------
+        np.ndarray
+            Filtered chunk with same shape as input.
+        """
+        # If no reference, cannot filter - return unchanged
+        if reference is None:
+            return chunk
+
+        n_sensors, chunk_samples = chunk.shape
+
+        # Validate reference length
+        if len(reference) != chunk_samples:
+            raise ValueError(
+                f"Reference length ({len(reference)}) must match "
+                f"chunk samples ({chunk_samples})"
+            )
+
+        # Initialize filters on first call
+        if self._n_channels == 0:
+            self._n_channels = n_sensors
+            self._filters = []
+            for _ in range(n_sensors):
+                if self.method.lower() == "lms":
+                    self._filters.append(LMSFilter(n_taps=self.n_taps, mu=self.mu))
+                elif self.method.lower() == "rls":
+                    self._filters.append(RLSFilter(n_taps=self.n_taps, lambda_=self.lambda_))
+                else:
+                    raise ValueError(f"Unknown method: {self.method}. Use 'lms' or 'rls'.")
+
+        # Check channel count matches
+        if n_sensors != self._n_channels:
+            raise ValueError(
+                f"Chunk has {n_sensors} channels but filter was initialized "
+                f"for {self._n_channels} channels. Call reset() to reinitialize."
+            )
+
+        # Apply per-channel filtering
+        output = np.zeros_like(chunk)
+        for i in range(n_sensors):
+            output[i] = self._filters[i].filter_batch(chunk[i], reference)
+
+        return output
+
+    def reset(self) -> None:
+        """
+        Reset all filter states.
+
+        Clears filter weights and buffers, and resets channel count
+        so filters will be reinitialized on next process() call.
+        """
+        for filt in self._filters:
+            filt.reset()
+        self._filters = []
+        self._n_channels = 0
+
+    @classmethod
+    def from_config(cls) -> "AdaptiveFilterHook":
+        """
+        Create an AdaptiveFilterHook from the default config.
+
+        Returns
+        -------
+        AdaptiveFilterHook
+            Hook configured from biology.artifact_rejection settings.
+        """
+        from subsense_bci.config import load_config
+
+        config = load_config()
+        ar_config = config.get("biology", {}).get("artifact_rejection", {})
+
+        return cls(
+            method=ar_config.get("method", "rls"),
+            n_taps=ar_config.get("n_taps", 32),
+            mu=ar_config.get("mu", 0.01),
+            lambda_=ar_config.get("lambda_", 0.99),
+        )

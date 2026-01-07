@@ -76,6 +76,47 @@ realtime:
   animation_interval_ms: 50
 
 # -----------------------------------------------------------------------------
+# Phase 5: Hemodynamic / Biological Parameters
+# -----------------------------------------------------------------------------
+biology:
+  # Master toggle for cardiac-correlated artifacts
+  # When true, sensor positions oscillate with cardiac rhythm
+  cardiac_pulse_active: true
+
+  # Toggle for vascular distribution mode (vs uniform cloud)
+  # When true, sensors distribute along vessel tree rather than uniform cube
+  vascular_distribution: false
+
+  # Hemodynamic drift parameters (sensor position oscillation)
+  hemodynamic:
+    # Amplitude of cardiac-induced sensor displacement in mm
+    # Typical capillary pulsatility is ~50 microns
+    drift_amplitude_mm: 0.05
+
+    # Cardiac frequency in Hz (~72 BPM = 1.2 Hz at rest)
+    drift_frequency_hz: 1.2
+
+    # Phase coherence within vessels (0=random, 1=fully synchronized)
+    phase_coherence: 0.2
+
+  # Artifact rejection parameters for online decoder pre-processing
+  artifact_rejection:
+    # Toggle for runtime artifact rejection in decode()
+    enabled: false
+
+    # Adaptive filter method: "rls" (Recursive Least Squares) or "lms" (Least Mean Squares)
+    method: "rls"
+
+    # Number of filter taps (higher = more complex artifact models)
+    n_taps: 32
+
+    # RLS forgetting factor (0.99 = slow adaptation, 0.9 = fast adaptation)
+    lambda_: 0.99
+
+    # LMS step size (only used if method="lms")
+    mu: 0.01
+
+# -----------------------------------------------------------------------------
 # Physics Constants (generally should not be modified)
 # -----------------------------------------------------------------------------
 physics:

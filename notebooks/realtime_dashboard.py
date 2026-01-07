@@ -477,21 +477,22 @@ class RealtimeDashboard:
 
         # ===== PHASE 1: ACQUISITION (measure chunk fetch time) =====
         acquire_start = time.perf_counter()
-        result = self.streamer.get_next_chunk(self.chunk_size_ms)
+        packet = self.streamer.get_next_chunk(self.chunk_size_ms)
 
-        if result is None:
+        if packet is None:
             # End of stream - restart
             self.streamer.reset()
-            result = self.streamer.get_next_chunk(self.chunk_size_ms)
+            packet = self.streamer.get_next_chunk(self.chunk_size_ms)
 
-        chunk, timestamp = result
+        chunk = packet.chunk
+        timestamp = packet.timestamp
         self.current_timestamp = timestamp
         acquire_end = time.perf_counter()
         acquire_ms = (acquire_end - acquire_start) * 1000.0
 
         # ===== PHASE 2: DECODE (PCA/ICA math) =====
         decode_start = time.perf_counter()
-        decode_result = self.decoder.decode(chunk, timestamp)
+        decode_result = self.decoder.decode(chunk, timestamp, packet.reference)
         decode_end = time.perf_counter()
         decode_ms = (decode_end - decode_start) * 1000.0
 
