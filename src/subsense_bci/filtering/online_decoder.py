@@ -196,10 +196,10 @@ class OnlineDecoder:
     def from_phase3_data(cls) -> "OnlineDecoder":
         """
         Create decoder from Phase 2/3 data files.
-        
+
         Convenience method that loads the standard simulation data
         and trains the decoder.
-        
+
         Returns
         -------
         OnlineDecoder
@@ -207,6 +207,194 @@ class OnlineDecoder:
         """
         recording, ground_truth, _ = load_phase2_data()
         return cls.from_training_data(recording, ground_truth)
+
+    @classmethod
+    def from_training_data_with_artifact_rejection(
+        cls,
+        recording: np.ndarray,
+        ground_truth: np.ndarray,
+        ppg_reference: np.ndarray,
+        artifact_method: str = "rls",
+        n_taps: int = 32,
+        variance_threshold: float = 0.999,
+        n_sources: int = 3,
+        random_state: int = 42,
+    ) -> "OnlineDecoder":
+        """
+        Train an OnlineDecoder with adaptive artifact rejection.
+
+        This method first applies adaptive filtering (RLS or LMS) to remove
+        cardiac artifacts from the training data, then trains the PCA/ICA
+        transformations on the cleaned data.
+
+        Parameters
+        ----------
+        recording : np.ndarray
+            Full sensor recording, shape (n_sensors, n_samples).
+        ground_truth : np.ndarray
+            Ground truth sources for determining order/sign.
+        ppg_reference : np.ndarray
+            PPG or cardiac reference with shape (n_samples,).
+        artifact_method : str, optional
+            Adaptive filter method: 'rls' or 'lms'. Default is 'rls'.
+        n_taps : int, optional
+            Number of filter taps. Default is 32.
+        variance_threshold : float
+            PCA variance threshold.
+        n_sources : int
+            Number of sources to recover.
+        random_state : int
+            Random seed for ICA.
+
+        Returns
+        -------
+        OnlineDecoder
+            Trained decoder ready for real-time use.
+
+        Notes
+        -----
+        The artifact rejection is applied ONLY during training to learn
+        cleaner transformations. For online decoding, you should either:
+        1. Apply artifact rejection to each chunk before calling decode()
+        2. Use the OnlineDecoderWithArtifactRejection class (if implemented)
+        """
+        from subsense_bci.filtering.adaptive_filter import apply_adaptive_cancellation
+
+        config = load_config()
+        sampling_rate_hz = config["temporal"]["sampling_rate_hz"]
+
+        print("Training OnlineDecoder with artifact rejection...")
+        print(f"  Artifact method: {artifact_method.upper()}, Taps: {n_taps}")
+
+        # Step 0: Apply adaptive artifact rejection
+        cleaned_recording = apply_adaptive_cancellation(
+            recording=recording,
+            reference=ppg_reference,
+            method=artifact_method,
+            n_taps=n_taps,
+            verbose=True,
+        )
+        print(f"  Artifact rejection applied to {recording.shape[0]} sensors")
+
+        # Step 1: Fit StandardScaler on CLEANED data
+        X = cleaned_recording.T  # (n_samples, n_sensors)
+        scaler = StandardScaler(with_std=False)
+        X_centered = scaler.fit_transform(X)
+        print(f"  Scaler: centering {recording.shape[0]} sensors")
+
+        # Step 2: Fit PCA on cleaned data
+        pca_full = PCA(n_components=min(X_centered.shape))
+        pca_full.fit(X_centered)
+        cumsum = np.cumsum(pca_full.explained_variance_ratio_)
+        n_components = np.searchsorted(cumsum, variance_threshold) + 1
+        n_components = max(n_sources, n_components)
+
+        pca = PCA(n_components=n_components)
+        X_pca = pca.fit_transform(X_centered)
+        print(f"  PCA: {recording.shape[0]} -> {n_components} components ({cumsum[n_components-1]*100:.1f}% var)")
+
+        # Step 3: Fit FastICA on cleaned data
+        ica = FastICA(
+            n_components=n_sources,
+            algorithm="parallel",
+            whiten="unit-variance",
+            fun="logcosh",
+            max_iter=1000,
+            random_state=random_state,
+            tol=1e-6,
+        )
+        sources = ica.fit_transform(X_pca)
+        print(f"  ICA: {n_components} -> {n_sources} sources (converged in {ica.n_iter_} iter)")
+
+        # Step 4: Determine source ordering and sign flips
+        _, _, source_order, sign_flips = match_sources(sources.T, ground_truth)
+        print(f"  Matching: order={source_order}, signs={sign_flips}")
+
+        return cls(
+            scaler=scaler,
+            pca=pca,
+            ica=ica,
+            source_order=source_order,
+            sign_flips=sign_flips,
+            sampling_rate_hz=sampling_rate_hz,
+        )
+
+    @classmethod
+    def from_dynamic_simulation(
+        cls,
+        sensor_cloud: "SensorCloud",
+        sources: np.ndarray,
+        ground_truth: np.ndarray | None = None,
+        variance_threshold: float = 0.999,
+        n_sources: int = 3,
+        random_state: int = 42,
+        use_artifact_rejection: bool = True,
+        artifact_method: str = "rls",
+    ) -> "OnlineDecoder":
+        """
+        Train decoder from a dynamic simulation with SensorCloud.
+
+        This is a convenience method that runs the dynamic simulation
+        and trains the decoder in one call.
+
+        Parameters
+        ----------
+        sensor_cloud : SensorCloud
+            Sensor cloud with hemodynamic drift parameters.
+        sources : np.ndarray
+            Source coordinates, shape (n_sources, 3) in mm.
+        ground_truth : np.ndarray, optional
+            Ground truth waveforms. If None, generated internally.
+        variance_threshold : float
+            PCA variance threshold.
+        n_sources : int
+            Number of sources to recover.
+        random_state : int
+            Random seed.
+        use_artifact_rejection : bool
+            Whether to apply adaptive artifact rejection.
+        artifact_method : str
+            Artifact rejection method if use_artifact_rejection=True.
+
+        Returns
+        -------
+        OnlineDecoder
+            Trained decoder.
+        """
+        from subsense_bci.simulation.sensor_cloud import SensorCloud
+        from subsense_bci.simulation.time_series import simulate_recording_dynamic
+
+        print("Running dynamic simulation for decoder training...")
+
+        # Run simulation
+        time_vec, source_waveforms, clean_data, noisy_data, ppg_reference = simulate_recording_dynamic(
+            sensor_cloud=sensor_cloud,
+            sources=sources,
+            verbose=True,
+        )
+
+        if ground_truth is None:
+            ground_truth = source_waveforms
+
+        # Train decoder
+        if use_artifact_rejection:
+            return cls.from_training_data_with_artifact_rejection(
+                recording=noisy_data,
+                ground_truth=ground_truth,
+                ppg_reference=ppg_reference,
+                artifact_method=artifact_method,
+                variance_threshold=variance_threshold,
+                n_sources=n_sources,
+                random_state=random_state,
+            )
+        else:
+            return cls.from_training_data(
+                recording=noisy_data,
+                ground_truth=ground_truth,
+                variance_threshold=variance_threshold,
+                n_sources=n_sources,
+                random_state=random_state,
+            )
     
     def decode(
         self,

@@ -297,6 +297,126 @@ def unmix_sources(
     )
 
 
+def unmix_sources_with_artifact_rejection(
+    recording: np.ndarray,
+    ground_truth: np.ndarray,
+    ppg_reference: np.ndarray,
+    artifact_method: str = "rls",
+    n_taps: int = 32,
+    variance_threshold: float = 0.999,
+    n_sources: int = 3,
+    random_state: int = 42,
+    verbose: bool = True,
+) -> tuple[UnmixingResult, np.ndarray]:
+    """
+    Enhanced unmixing pipeline with adaptive cardiac artifact rejection.
+
+    This function applies adaptive filtering (RLS or LMS) to remove
+    hemodynamic artifacts BEFORE the PCA/ICA pipeline. This is critical
+    for Subsense simulations where cardiac pulsatility causes time-varying
+    lead fields.
+
+    Pipeline:
+        Raw Recording -> Adaptive Artifact Rejection -> PCA -> ICA -> Match Sources
+
+    Parameters
+    ----------
+    recording : np.ndarray
+        Noisy sensor recording with shape (n_sensors, n_samples).
+    ground_truth : np.ndarray
+        Ground truth sources with shape (n_sources, n_samples).
+    ppg_reference : np.ndarray
+        PPG or cardiac reference with shape (n_samples,).
+    artifact_method : str, optional
+        Adaptive filter method: 'rls' or 'lms'. Default is 'rls'.
+    n_taps : int, optional
+        Number of filter taps. Default is 32.
+    variance_threshold : float, optional
+        PCA variance preservation threshold. Default is 0.999.
+    n_sources : int, optional
+        Number of sources to recover. Default is 3.
+    random_state : int, optional
+        Random seed. Default is 42.
+    verbose : bool, optional
+        Print progress messages. Default is True.
+
+    Returns
+    -------
+    result : UnmixingResult
+        Unmixing results from the cleaned recording.
+    cleaned_recording : np.ndarray
+        Recording after artifact rejection, shape (n_sensors, n_samples).
+
+    Examples
+    --------
+    >>> result, cleaned = unmix_sources_with_artifact_rejection(
+    ...     recording, ground_truth, ppg_reference, artifact_method='rls'
+    ... )
+    >>> print(f"Correlation: {result.matched_correlations}")
+    """
+    from subsense_bci.filtering.adaptive_filter import (
+        apply_adaptive_cancellation,
+        compute_artifact_rejection_snr,
+    )
+
+    if verbose:
+        print("\n[0/4] Adaptive Artifact Rejection...")
+        print(f"  Method: {artifact_method.upper()}, Taps: {n_taps}")
+
+    # Step 0: Apply adaptive filtering to remove cardiac artifacts
+    cleaned_recording = apply_adaptive_cancellation(
+        recording=recording,
+        reference=ppg_reference,
+        method=artifact_method,
+        n_taps=n_taps,
+        verbose=verbose,
+    )
+
+    if verbose:
+        # Compute artifact rejection metrics
+        metrics = compute_artifact_rejection_snr(recording, cleaned_recording, ppg_reference)
+        print(f"  Artifact correlation: {metrics['correlation_before']:.4f} -> {metrics['correlation_after']:.4f}")
+        print(f"  Rejection: {metrics['rejection_db']:.1f} dB")
+
+    # Steps 1-3: Standard PCA/ICA pipeline on cleaned data
+    if verbose:
+        print("\n[1/4] PCA Dimensionality Reduction...")
+
+    pca_data, pca = pca_denoise(cleaned_recording, variance_threshold)
+
+    if verbose:
+        print(f"\n[2/4] FastICA Source Separation...")
+        print(f"  Extracting {n_sources} independent components...")
+
+    recovered, ica = run_fastica(pca_data, n_components=n_sources, random_state=random_state)
+
+    if verbose:
+        print(f"  ICA converged in {ica.n_iter_} iterations")
+        print(f"\n[3/4] Source Matching...")
+
+    matched, corr_matrix, order, signs = match_sources(recovered, ground_truth)
+
+    # Extract matched correlations
+    matched_correlations = np.abs(np.diag(
+        corr_matrix[np.arange(n_sources), :][:, order]
+    ))
+
+    result = UnmixingResult(
+        recovered_sources=recovered,
+        matched_sources=matched,
+        correlation_matrix=corr_matrix,
+        matched_correlations=matched_correlations,
+        source_order=order,
+        sign_flips=signs,
+        n_pca_components=pca.n_components_,
+        variance_explained=np.sum(pca.explained_variance_ratio_),
+        pca_singular_values=pca.singular_values_,
+        ica_n_iter=ica.n_iter_,
+    )
+
+    return result, cleaned_recording
+
+
 def save_unmixing_results(
     result: UnmixingResult,
     output_dir: Path | str = None,

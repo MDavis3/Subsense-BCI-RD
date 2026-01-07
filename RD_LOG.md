@@ -1,7 +1,7 @@
 # Subsense BCI R&D Log
 
 ## ⚠️ Active Physical Assumptions (Living Document)
-*Last Updated: 2026-01-05*
+*Last Updated: 2026-01-06*
 
 1. **Volume Conductor**: Homogeneous isotropic medium ($\sigma = 0.33 \text{ S/m}$).
 2. **Sensor Behavior**: Point-source potential receiver (Voltage $\propto 1/r$).
@@ -776,6 +776,30 @@ should match the concatenated offline result (modulo edge effects).
 - Wolpaw et al., "Brain-Computer Interfaces" (2012) — BCI latency requirements
 
 **Status**: ✅ Phase 4 COMPLETE — Real-time decoding operational
+
+---
+
+### [2026-01-06] Documentation & README Update
+
+**Category**: Infrastructure
+**Files Modified**: `README.md`
+
+**Problem/Goal**:
+Ensure project documentation accurately reflects current state. Phase 4 was complete but README still showed it as "🔜 Next".
+
+**Changes Made**:
+1. Updated Phase Status table: Phase 4 now shows "✅ Complete (r=0.989, 42.7ms)"
+2. Added Phase 5 (Hemodynamic artifact rejection) as next milestone
+3. Updated Overview section to include Phase 4 description
+4. Added `realtime_dashboard.py` to dashboard generation examples
+
+**Validation**:
+- Live validation confirmed physics correctness: Lead field 1/r correlation = 1.000000
+- ICA recovery verified: α=0.9948, β=0.9876, pink=0.9999 (avg r=0.9941)
+- 26 unit tests passing
+
+**Why This Matters**:
+Accurate documentation prevents the project from appearing incomplete or abandoned. Clear phase status helps collaborators understand current capabilities.
 
 ---
 

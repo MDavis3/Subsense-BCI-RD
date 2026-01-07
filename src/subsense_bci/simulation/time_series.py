@@ -21,12 +21,15 @@ from pathlib import Path
 import numpy as np
 
 from subsense_bci.physics.constants import (
-    SAMPLING_RATE_HZ,
-    DURATION_SEC,
-    SNR_LEVEL,
+    CARDIAC_FREQUENCY_HZ,
     DEFAULT_RANDOM_SEED,
+    DURATION_SEC,
+    HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
+    ME_RESONANT_FREQ_KHZ,
+    SAMPLING_RATE_HZ,
+    SNR_LEVEL,
 )
-from subsense_bci.physics.transfer_function import compute_lead_field
+from subsense_bci.physics.transfer_function import compute_lead_field, compute_me_lead_field
 
 
 def get_project_root() -> Path:
@@ -303,6 +306,211 @@ def simulate_recording(
     print(f"  SNR verification: target={snr:.2f}, actual={actual_snr:.4f}")
 
     return time_vector, source_waveforms, clean_data, noisy_data
+
+
+def generate_ppg_reference(
+    time_vector: np.ndarray,
+    cardiac_freq_hz: float = CARDIAC_FREQUENCY_HZ,
+    seed: int = DEFAULT_RANDOM_SEED,
+) -> np.ndarray:
+    """
+    Generate a simulated PPG (photoplethysmography) reference signal.
+
+    The PPG waveform approximates the cardiac pulse wave with:
+    - Fundamental at cardiac frequency
+    - Second harmonic for dicrotic notch characteristic
+    - Small phase noise for physiological variability
+
+    Parameters
+    ----------
+    time_vector : np.ndarray
+        Time vector in seconds.
+    cardiac_freq_hz : float, optional
+        Cardiac frequency in Hz. Default is 1.2 (~72 BPM).
+    seed : int, optional
+        Random seed for phase noise. Default is 42.
+
+    Returns
+    -------
+    np.ndarray
+        PPG reference signal with shape (n_samples,).
+        Normalized to have unit amplitude.
+    """
+    np.random.seed(seed + 500)
+
+    # Small phase jitter for physiological variability
+    phase_noise = np.cumsum(np.random.randn(len(time_vector)) * 0.002)
+
+    # Fundamental frequency
+    fundamental = np.sin(2 * np.pi * cardiac_freq_hz * time_vector + phase_noise)
+
+    # Second harmonic (creates dicrotic notch characteristic)
+    harmonic = 0.3 * np.sin(4 * np.pi * cardiac_freq_hz * time_vector + 0.5 + phase_noise * 2)
+
+    ppg = fundamental + harmonic
+
+    # Normalize
+    ppg = ppg / np.max(np.abs(ppg))
+
+    return ppg
+
+
+def simulate_recording_dynamic(
+    sensor_cloud: "SensorCloud",
+    sources: np.ndarray,
+    tx_position: np.ndarray | None = None,
+    duration_sec: float = DURATION_SEC,
+    sampling_rate_hz: float = SAMPLING_RATE_HZ,
+    frequency_khz: float = ME_RESONANT_FREQ_KHZ,
+    snr: float = SNR_LEVEL,
+    seed: int = DEFAULT_RANDOM_SEED,
+    use_me_physics: bool = True,
+    verbose: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Run time-domain simulation with dynamic (time-varying) lead field.
+
+    This is the Subsense-specific simulation that accounts for:
+    1. ME backscatter physics (round-trip transfer function)
+    2. Hemodynamic drift (cardiac-driven sensor position oscillation)
+    3. Time-varying lead field L(t) computed per timestep
+
+    Forward model: X(t) = L(t) @ S(t) + N(t)
+
+    where L(t) depends on sensor positions at time t.
+
+    Parameters
+    ----------
+    sensor_cloud : SensorCloud
+        Sensor cloud with positions and drift parameters.
+    sources : np.ndarray
+        Source coordinates with shape (n_sources, 3) in mm.
+    tx_position : np.ndarray, optional
+        TX coil position (3,) in mm. Default is [0, 0, 10].
+    duration_sec : float, optional
+        Simulation duration in seconds. Default is 2.0.
+    sampling_rate_hz : float, optional
+        Sampling rate in Hz. Default is 1000.
+    frequency_khz : float, optional
+        ME operating frequency in kHz. Default is 340 (resonance).
+    snr : float, optional
+        Signal-to-noise ratio (linear). Default is 5.0.
+    seed : int, optional
+        Random seed. Default is 42.
+    use_me_physics : bool, optional
+        If True, use ME round-trip model. If False, use electric-only.
+        Default is True.
+    verbose : bool, optional
+        Print progress messages. Default is True.
+
+    Returns
+    -------
+    time_vector : np.ndarray
+        Time vector with shape (n_samples,) in seconds.
+    source_waveforms : np.ndarray
+        Source signals with shape (n_sources, n_samples).
+    clean_data : np.ndarray
+        Clean sensor data with shape (n_sensors, n_samples).
+    noisy_data : np.ndarray
+        Noisy sensor data with shape (n_sensors, n_samples).
+    ppg_reference : np.ndarray
+        PPG reference signal with shape (n_samples,).
+
+    Notes
+    -----
+    This function is computationally expensive as it recomputes the lead
+    field at each timestep. For 2 seconds at 1 kHz with 10,000 sensors,
+    expect ~2000 lead field computations.
+
+    Examples
+    --------
+    >>> from subsense_bci.simulation.sensor_cloud import SensorCloud
+    >>> cloud = SensorCloud.from_uniform_cloud(n_sensors=1000)
+    >>> sources = np.array([[0.2, 0.0, 0.0], [-0.2, 0.2, 0.0], [0.0, -0.2, 0.1]])
+    >>> t, S, X_clean, X_noisy, ppg = simulate_recording_dynamic(cloud, sources)
+    """
+    # Import here to avoid circular dependency at module load
+    from subsense_bci.simulation.sensor_cloud import SensorCloud
+
+    # Type hint for IDE (actual check is implicit from method calls)
+    if not isinstance(sensor_cloud, SensorCloud):
+        raise TypeError("sensor_cloud must be a SensorCloud instance")
+
+    sources = np.asarray(sources, dtype=np.float64)
+    if sources.ndim != 2 or sources.shape[1] != 3:
+        raise ValueError(f"sources must have shape (n_sources, 3), got {sources.shape}")
+
+    # Step 1: Generate time vector
+    time_vector = generate_time_vector(duration_sec, sampling_rate_hz)
+    n_samples = len(time_vector)
+    n_sensors = sensor_cloud.n_sensors
+    n_sources = sources.shape[0]
+
+    if verbose:
+        print(f"  Time vector: {n_samples} samples @ {sampling_rate_hz} Hz")
+        print(f"  Sensors: {n_sensors}, Sources: {n_sources}")
+        print(f"  Using {'ME round-trip' if use_me_physics else 'electric-only'} physics")
+
+    # Step 2: Generate source waveforms
+    source_waveforms = generate_source_waveforms(time_vector, seed=seed)
+
+    if verbose:
+        print(f"  Source waveforms: {source_waveforms.shape}")
+
+    # Step 3: Generate PPG reference (for artifact rejection later)
+    ppg_reference = generate_ppg_reference(
+        time_vector,
+        cardiac_freq_hz=sensor_cloud.drift_frequency_hz,
+        seed=seed,
+    )
+
+    # Step 4: Compute time-varying forward model
+    # Pre-allocate output
+    clean_data = np.zeros((n_sensors, n_samples), dtype=np.float64)
+
+    if verbose:
+        print(f"  Computing dynamic lead field ({n_samples} timesteps)...")
+
+    # Progress tracking
+    progress_interval = max(1, n_samples // 10)
+
+    for i, t in enumerate(time_vector):
+        # Get sensor positions at this time
+        positions_t = sensor_cloud.get_positions_at_time(t)
+
+        # Compute lead field
+        if use_me_physics:
+            L_t, _ = compute_me_lead_field(
+                positions_t,
+                sources,
+                tx_position=tx_position,
+                frequency_khz=frequency_khz,
+            )
+        else:
+            L_t, _ = compute_lead_field(positions_t, sources)
+
+        # Forward model: X_t = L_t @ S_t
+        clean_data[:, i] = L_t @ source_waveforms[:, i]
+
+        # Progress reporting
+        if verbose and (i + 1) % progress_interval == 0:
+            pct = 100 * (i + 1) / n_samples
+            print(f"    Progress: {pct:.0f}%")
+
+    if verbose:
+        print(f"  Clean data: {clean_data.shape}")
+
+    # Step 5: Add sensor noise
+    noisy_data, noise = add_sensor_noise(clean_data, snr=snr, seed=seed)
+
+    if verbose:
+        signal_power = np.mean(clean_data ** 2)
+        noise_power = np.mean(noise ** 2)
+        actual_snr = signal_power / noise_power
+        print(f"  Noisy data: {noisy_data.shape}")
+        print(f"  SNR verification: target={snr:.2f}, actual={actual_snr:.4f}")
+
+    return time_vector, source_waveforms, clean_data, noisy_data, ppg_reference
 
 
 def load_phase1_data() -> tuple[np.ndarray, np.ndarray]:

@@ -4,11 +4,12 @@ Neural signal processing pipeline for magnetoelectric (ME) nanoparticle brain-co
 
 ## Overview
 
-This repository implements a complete forward-inverse BCI simulation:
+This repository implements a complete forward-inverse BCI simulation with real-time decoding:
 
 1. **Phase 1: Sensor Cloud** — Generate 10,000 ME nanoparticle sensors in a 1mm³ volume
 2. **Phase 2: Temporal Dynamics** — Simulate neural source waveforms (10Hz α, 20Hz β, pink noise) mixed through a physics-based lead field
 3. **Phase 3: Source Unmixing** — Recover original sources via PCA dimensionality reduction + FastICA blind source separation
+4. **Phase 4: Real-Time Decoding** — Online BCI pipeline with chunk-based streaming, achieving r=0.989 correlation at 42.7ms latency
 
 ## Installation
 
