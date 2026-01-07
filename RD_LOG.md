@@ -803,5 +803,87 @@ Accurate documentation prevents the project from appearing incomplete or abandon
 
 ---
 
+### [2026-01-07] Phase 4 Integrity Verification & Latency Metrics Fix
+
+**Category**: Filtering | Visualization
+**Files Modified**:
+- `notebooks/realtime_dashboard.py` (updated)
+
+**Problem/Goal**:
+Pre-release verification of Phase 4 (Real-Time Decoding) identified that the "Latency"
+metric in the HUD was only measuring PCA/ICA decode time, not true end-to-end system
+latency. This understated actual processing time by excluding chunk acquisition and
+visualization rendering.
+
+**Verification Results**:
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| Latency Audit | ⚠️ Fixed | Was measuring decode only, now shows full breakdown |
+| Buffer Integrity | ✅ Pass | Contiguous slicing, no seams or discontinuities |
+| Static Decoder | ✅ Pass | Pre-learned weights used correctly, no re-fitting |
+
+**Approach**:
+
+Implemented granular latency breakdown in the dashboard HUD:
+
+```
+LATENCY BREAKDOWN
+  ACQUIRE:   X.X ms   (DataStreamer.get_next_chunk)
+  DECODE:    X.X ms   (OnlineDecoder PCA/ICA math)
+  RENDER:    X.X ms   (Buffer updates + plot line updates)
+  E2E TOTAL: X.X ms   (Acquisition + Decode + Render)
+```
+
+Each phase is now independently timed using `time.perf_counter()`:
+
+```python
+# Phase 1: Acquisition
+acquire_start = time.perf_counter()
+chunk, timestamp = streamer.get_next_chunk()
+acquire_ms = (time.perf_counter() - acquire_start) * 1000.0
+
+# Phase 2: Decode
+decode_start = time.perf_counter()
+result = decoder.decode(chunk, timestamp)
+decode_ms = (time.perf_counter() - decode_start) * 1000.0
+
+# Phase 3: Render
+render_start = time.perf_counter()
+# ... buffer updates, plot updates ...
+render_ms = (time.perf_counter() - render_start) * 1000.0
+
+# Total E2E
+e2e_ms = acquire_ms + decode_ms + render_ms
+```
+
+**Why This Approach**:
+
+1. **Transparency for stakeholders**: Leadership can now see exactly where time is spent
+   in the pipeline. The previous 42.7ms "latency" was misleading — it excluded I/O and
+   rendering overhead.
+
+2. **Real-time factor accuracy**: The RT factor is now calculated from E2E latency,
+   giving a true picture of whether the system can keep up with real-time data rates.
+
+3. **Optimization guidance**: Separate metrics help identify bottlenecks. If DECODE
+   dominates, reduce PCA components. If RENDER dominates, reduce display_sensors.
+
+**Impact on Reported Metrics**:
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Latency displayed | Decode only (~42.7ms) | Full E2E breakdown |
+| RT Factor basis | Decode time | E2E time |
+| Bottleneck visibility | Hidden | Explicit |
+
+**References**:
+- Wolpaw et al., "Brain-Computer Interfaces" (2012) — BCI latency requirements
+- Real-time systems engineering best practices — End-to-end timing analysis
+
+**Status**: ✅ Phase 4 Verification COMPLETE — Ready for leadership review
+
+---
+
 <!-- Add new entries above this line -->
 

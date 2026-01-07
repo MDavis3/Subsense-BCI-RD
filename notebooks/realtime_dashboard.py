@@ -103,8 +103,19 @@ class RealtimeDashboard:
         self.correlations = np.array([0.0, 0.0, 0.0])  # Alpha, Beta, Pink
 
         # Performance metrics (use simple arrays)
-        self.latency_history = np.zeros(50)
-        self.latency_idx = 0
+        # Decode latency = PCA/ICA math only
+        self.decode_latency_history = np.zeros(50)
+        self.decode_latency_idx = 0
+        # End-to-end latency = Acquisition + Decode + Render
+        self.e2e_latency_history = np.zeros(50)
+        self.e2e_latency_idx = 0
+        # Acquisition time (chunk fetch)
+        self.acquire_latency_history = np.zeros(50)
+        self.acquire_latency_idx = 0
+        # Render time (plot updates)
+        self.render_latency_history = np.zeros(50)
+        self.render_latency_idx = 0
+        # Frame timing
         self.frame_time_history = np.zeros(30)
         self.frame_time_idx = 0
         self.last_frame_time = time.perf_counter()
@@ -297,40 +308,10 @@ class RealtimeDashboard:
         # Divider
         ax.plot([0.1, 0.9], [0.78, 0.78], color=COLORS["grid_line"], linewidth=1)
 
-        # Metric labels (static) - Performance section
-        metrics_y = [0.68, 0.58, 0.48, 0.38]
-        metric_labels = ["LATENCY", "FPS", "TIMESTAMP", "RT FACTOR"]
-
-        for y, label in zip(metrics_y, metric_labels):
-            ax.text(
-                0.12, y,
-                f"{label}:",
-                fontsize=9,
-                fontfamily="monospace",
-                color=COLORS["text_secondary"],
-            )
-
-        # Metric values (will be updated)
-        self.metric_texts = {}
-        for y, key in zip(metrics_y, ["latency", "fps", "timestamp", "rt_factor"]):
-            self.metric_texts[key] = ax.text(
-                0.88, y,
-                "---",
-                ha="right",
-                fontsize=10,
-                fontfamily="monospace",
-                fontweight="bold",
-                color=COLORS["text_primary"],
-                animated=True,
-            )
-
-        # Divider for source recovery section
-        ax.plot([0.1, 0.9], [0.30, 0.30], color=COLORS["grid_line"], linewidth=1)
-
-        # Source recovery quality section title
+        # Latency breakdown section title
         ax.text(
-            0.5, 0.25,
-            "SOURCE RECOVERY",
+            0.5, 0.70,
+            "LATENCY BREAKDOWN",
             ha="center",
             fontsize=9,
             fontweight="bold",
@@ -338,19 +319,79 @@ class RealtimeDashboard:
             color=COLORS["text_accent"],
         )
 
+        # Latency metrics (detailed breakdown)
+        latency_y = [0.63, 0.56, 0.49, 0.42]
+        latency_labels = ["ACQUIRE", "DECODE", "RENDER", "E2E TOTAL"]
+        latency_keys = ["acquire", "decode", "render", "e2e"]
+
+        for y, label in zip(latency_y, latency_labels):
+            ax.text(
+                0.12, y,
+                f"{label}:",
+                fontsize=8,
+                fontfamily="monospace",
+                color=COLORS["text_secondary"],
+            )
+
+        # Metric values (will be updated)
+        self.metric_texts = {}
+        for y, key in zip(latency_y, latency_keys):
+            self.metric_texts[key] = ax.text(
+                0.88, y,
+                "---",
+                ha="right",
+                fontsize=9,
+                fontfamily="monospace",
+                fontweight="bold",
+                color=COLORS["text_primary"],
+                animated=True,
+            )
+
+        # Divider between latency and other metrics
+        ax.plot([0.1, 0.9], [0.36, 0.36], color=COLORS["grid_line"], linewidth=1)
+
+        # Other performance metrics
+        other_metrics_y = [0.30, 0.23]
+        other_labels = ["FPS", "RT FACTOR"]
+        other_keys = ["fps", "rt_factor"]
+
+        for y, label in zip(other_metrics_y, other_labels):
+            ax.text(
+                0.12, y,
+                f"{label}:",
+                fontsize=8,
+                fontfamily="monospace",
+                color=COLORS["text_secondary"],
+            )
+
+        for y, key in zip(other_metrics_y, other_keys):
+            self.metric_texts[key] = ax.text(
+                0.88, y,
+                "---",
+                ha="right",
+                fontsize=9,
+                fontfamily="monospace",
+                fontweight="bold",
+                color=COLORS["text_primary"],
+                animated=True,
+            )
+
+        # Divider for source recovery section
+        ax.plot([0.1, 0.9], [0.17, 0.17], color=COLORS["grid_line"], linewidth=1)
+
         # Average correlation metric
         ax.text(
-            0.12, 0.17,
+            0.12, 0.12,
             "AVG CORR:",
-            fontsize=9,
+            fontsize=8,
             fontfamily="monospace",
             color=COLORS["text_secondary"],
         )
         self.metric_texts["avg_corr"] = ax.text(
-            0.88, 0.17,
+            0.88, 0.12,
             "---",
             ha="right",
-            fontsize=10,
+            fontsize=9,
             fontfamily="monospace",
             fontweight="bold",
             color=COLORS["text_primary"],
@@ -358,9 +399,9 @@ class RealtimeDashboard:
         )
 
         # Progress bar
-        ax.plot([0.1, 0.9], [0.08, 0.08], color=COLORS["grid_line"], linewidth=4)
+        ax.plot([0.1, 0.9], [0.05, 0.05], color=COLORS["grid_line"], linewidth=4)
         self.progress_line, = ax.plot(
-            [0.1, 0.1], [0.08, 0.08],
+            [0.1, 0.1], [0.05, 0.05],
             color=COLORS["nanotech_cyan"],
             linewidth=4,
             animated=True,
@@ -369,24 +410,42 @@ class RealtimeDashboard:
         # Add HUD elements to blit list
         self.hud_artists = list(self.metric_texts.values()) + [self.progress_line]
 
-    def _update_hud(self, timestamp: float, latency_ms: float) -> None:
+    def _update_hud(
+        self,
+        timestamp: float,
+        acquire_ms: float,
+        decode_ms: float,
+        render_ms: float,
+    ) -> None:
         """Update HUD metric displays (called every few frames for performance)."""
+        # Calculate E2E latency
+        e2e_ms = acquire_ms + decode_ms + render_ms
+
         # Calculate FPS from history
         avg_frame_time = np.mean(self.frame_time_history)
         fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
 
-        # Calculate real-time factor
-        avg_latency = np.mean(self.latency_history)
-        rt_factor = self.chunk_size_ms / avg_latency if avg_latency > 0 else 0
+        # Calculate real-time factor based on E2E latency (not just decode)
+        avg_e2e = np.mean(self.e2e_latency_history)
+        rt_factor = self.chunk_size_ms / avg_e2e if avg_e2e > 0 else 0
 
-        # Update text
-        self.metric_texts["latency"].set_text(f"{latency_ms:.1f} ms")
-        self.metric_texts["latency"].set_color(
-            COLORS["success_green"] if latency_ms < self.chunk_size_ms else COLORS["warning_red"]
+        # Update latency breakdown
+        self.metric_texts["acquire"].set_text(f"{acquire_ms:.1f} ms")
+        self.metric_texts["acquire"].set_color(COLORS["text_primary"])
+
+        self.metric_texts["decode"].set_text(f"{decode_ms:.1f} ms")
+        self.metric_texts["decode"].set_color(COLORS["text_primary"])
+
+        self.metric_texts["render"].set_text(f"{render_ms:.1f} ms")
+        self.metric_texts["render"].set_color(COLORS["text_primary"])
+
+        # E2E total with color coding
+        self.metric_texts["e2e"].set_text(f"{e2e_ms:.1f} ms")
+        self.metric_texts["e2e"].set_color(
+            COLORS["success_green"] if e2e_ms < self.chunk_size_ms else COLORS["warning_red"]
         )
 
         self.metric_texts["fps"].set_text(f"{fps:.1f}")
-        self.metric_texts["timestamp"].set_text(f"{timestamp:.2f} s")
 
         self.metric_texts["rt_factor"].set_text(f"{rt_factor:.1f}x")
         self.metric_texts["rt_factor"].set_color(
@@ -416,7 +475,8 @@ class RealtimeDashboard:
         self.frame_time_idx += 1
         self.frame_count += 1
 
-        # Get next chunk
+        # ===== PHASE 1: ACQUISITION (measure chunk fetch time) =====
+        acquire_start = time.perf_counter()
         result = self.streamer.get_next_chunk(self.chunk_size_ms)
 
         if result is None:
@@ -426,13 +486,23 @@ class RealtimeDashboard:
 
         chunk, timestamp = result
         self.current_timestamp = timestamp
+        acquire_end = time.perf_counter()
+        acquire_ms = (acquire_end - acquire_start) * 1000.0
 
-        # Decode chunk
+        # ===== PHASE 2: DECODE (PCA/ICA math) =====
+        decode_start = time.perf_counter()
         decode_result = self.decoder.decode(chunk, timestamp)
+        decode_end = time.perf_counter()
+        decode_ms = (decode_end - decode_start) * 1000.0
 
-        # Store latency
-        self.latency_history[self.latency_idx % len(self.latency_history)] = decode_result.latency_ms
-        self.latency_idx += 1
+        # Store latencies
+        self.acquire_latency_history[self.acquire_latency_idx % len(self.acquire_latency_history)] = acquire_ms
+        self.acquire_latency_idx += 1
+        self.decode_latency_history[self.decode_latency_idx % len(self.decode_latency_history)] = decode_ms
+        self.decode_latency_idx += 1
+
+        # ===== PHASE 3: RENDER (buffer updates + plot line updates) =====
+        render_start = time.perf_counter()
 
         # ===== OPTIMIZED BUFFER UPDATE (batch operations) =====
         chunk_samples = chunk.shape[1]
@@ -493,9 +563,21 @@ class RealtimeDashboard:
         for i, (corr_label, name) in enumerate(zip(self.corr_labels, source_names)):
             corr_label.set_text(f"r={self.correlations[i]:.2f}")
 
+        # End render timing
+        render_end = time.perf_counter()
+        render_ms = (render_end - render_start) * 1000.0
+
+        # Store render and E2E latencies
+        self.render_latency_history[self.render_latency_idx % len(self.render_latency_history)] = render_ms
+        self.render_latency_idx += 1
+
+        e2e_ms = acquire_ms + decode_ms + render_ms
+        self.e2e_latency_history[self.e2e_latency_idx % len(self.e2e_latency_history)] = e2e_ms
+        self.e2e_latency_idx += 1
+
         # Update HUD every 3 frames (reduces overhead)
         if self.frame_count % 3 == 0:
-            self._update_hud(timestamp, decode_result.latency_ms)
+            self._update_hud(timestamp, acquire_ms, decode_ms, render_ms)
 
         # Return artists for blitting
         return self.blit_artists + self.hud_artists
