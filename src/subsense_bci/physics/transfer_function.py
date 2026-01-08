@@ -230,6 +230,244 @@ def compute_distance_matrix(
     return np.linalg.norm(diff, axis=2)
 
 
+def compute_lead_field_gradient(
+    sensors: np.ndarray,
+    sources: np.ndarray,
+    conductivity: float = BRAIN_CONDUCTIVITY_S_M,
+    min_distance_mm: float = SINGULARITY_THRESHOLD_MM,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute analytical gradients of the lead field with respect to sensor position.
+
+    The lead field L = 1/(4πσr) has gradient:
+        ∇L = -r̂ / (4πσr²) = -(r_vec) / (4πσr³)
+
+    where r̂ is the unit vector from source to sensor and r is the distance.
+
+    This is essential for the gradient-based artifact model:
+        A(t) = ∇L · δr(t)
+
+    where δr(t) is the time-varying sensor displacement.
+
+    Parameters
+    ----------
+    sensors : np.ndarray
+        Sensor coordinates with shape (n_sensors, 3) in mm.
+    sources : np.ndarray
+        Source coordinates with shape (n_sources, 3) in mm.
+    conductivity : float, optional
+        Volume conductor conductivity in S/m. Default is 0.33 S/m.
+    min_distance_mm : float, optional
+        Minimum distance threshold for singularity clamping in mm.
+
+    Returns
+    -------
+    dL_dx : np.ndarray
+        Gradient component ∂L/∂x with shape (n_sensors, n_sources).
+    dL_dy : np.ndarray
+        Gradient component ∂L/∂y with shape (n_sensors, n_sources).
+    dL_dz : np.ndarray
+        Gradient component ∂L/∂z with shape (n_sensors, n_sources).
+    singularity_mask : np.ndarray
+        Boolean mask where distance clamping was applied.
+
+    Notes
+    -----
+    The gradient points from source toward sensor (increasing potential).
+    Mathematically: ∇_sensor L = -(r_sensor - r_source) / (4πσ|r|³)
+
+    Examples
+    --------
+    >>> sensors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    >>> sources = np.array([[0.0, 0.0, 0.0]])
+    >>> dLdx, dLdy, dLdz, mask = compute_lead_field_gradient(sensors, sources)
+    >>> dLdx.shape
+    (2, 1)
+    """
+    sensors = np.asarray(sensors, dtype=np.float64)
+    sources = np.asarray(sources, dtype=np.float64)
+
+    if sensors.ndim != 2 or sensors.shape[1] != 3:
+        raise ValueError(f"sensors must have shape (N, 3), got {sensors.shape}")
+    if sources.ndim != 2 or sources.shape[1] != 3:
+        raise ValueError(f"sources must have shape (M, 3), got {sources.shape}")
+
+    # Compute displacement vectors: r = sensor - source
+    # diff[i, j, k] = sensors[i, k] - sources[j, k]
+    # Shape: (n_sensors, n_sources, 3)
+    diff = sensors[:, np.newaxis, :] - sources[np.newaxis, :, :]
+
+    # Compute distances
+    distances_mm = np.linalg.norm(diff, axis=2)  # (n_sensors, n_sources)
+
+    # Identify singularities
+    singularity_mask = distances_mm < min_distance_mm
+
+    # Clamp distances
+    distances_clamped_mm = np.maximum(distances_mm, min_distance_mm)
+    distances_m = distances_clamped_mm * 1e-3  # Convert to meters
+
+    # Compute gradient: ∇L = -r / (4πσr³) = -(diff / r) / (4πσr²)
+    # Factor: 1 / (4πσr³) in appropriate units
+    # diff is in mm, we need to convert to meters for consistency
+    diff_m = diff * 1e-3  # Convert mm to meters
+
+    # Gradient factor: -1 / (4πσr³)
+    # Shape: (n_sensors, n_sources)
+    r_cubed = distances_m**3
+    gradient_factor = -1.0 / (4.0 * np.pi * conductivity * r_cubed)
+
+    # Compute gradient components
+    # dL/dx = gradient_factor * (x_sensor - x_source)
+    dL_dx = gradient_factor * diff_m[:, :, 0]
+    dL_dy = gradient_factor * diff_m[:, :, 1]
+    dL_dz = gradient_factor * diff_m[:, :, 2]
+
+    return dL_dx, dL_dy, dL_dz, singularity_mask
+
+
+def compute_gradient_artifact(
+    dL_dx: np.ndarray,
+    dL_dy: np.ndarray,
+    dL_dz: np.ndarray,
+    displacement: np.ndarray,
+    source_amplitudes: np.ndarray,
+) -> np.ndarray:
+    """
+    Compute gradient-based motion artifact.
+
+    Implements the artifact model:
+        A(t) = (∇L · δr(t)) @ S(t)
+
+    where:
+    - ∇L is the lead field gradient (dL/dx, dL/dy, dL/dz)
+    - δr(t) is the sensor displacement at time t
+    - S(t) is the source amplitude vector
+
+    This models how sensor motion (from cardiac pulsation) creates artifacts
+    proportional to the spatial gradient of the lead field.
+
+    Parameters
+    ----------
+    dL_dx, dL_dy, dL_dz : np.ndarray
+        Lead field gradient components, each shape (n_sensors, n_sources).
+    displacement : np.ndarray
+        Sensor displacement in mm. Shape can be:
+        - (n_sensors, 3): Single time point
+        - (n_times, n_sensors, 3): Time series
+    source_amplitudes : np.ndarray
+        Source current amplitudes. Shape can be:
+        - (n_sources,): Single time point
+        - (n_sources, n_times): Time series
+
+    Returns
+    -------
+    np.ndarray
+        Artifact signal. Shape depends on inputs:
+        - (n_sensors,) if single time point
+        - (n_sensors, n_times) if time series
+
+    Notes
+    -----
+    The dot product ∇L · δr gives the change in lead field due to motion:
+        δL = (∂L/∂x)·δx + (∂L/∂y)·δy + (∂L/∂z)·δz
+
+    For small displacements, this linear approximation is accurate.
+    Typical cardiac displacements (~50μm) are well within this regime.
+
+    Examples
+    --------
+    >>> n_sensors, n_sources = 100, 3
+    >>> dLdx = np.random.randn(n_sensors, n_sources)
+    >>> dLdy = np.random.randn(n_sensors, n_sources)
+    >>> dLdz = np.random.randn(n_sensors, n_sources)
+    >>> displacement = np.random.randn(n_sensors, 3) * 0.05  # 50μm
+    >>> source_amps = np.array([1.0, 0.5, 0.2])
+    >>> artifact = compute_gradient_artifact(dLdx, dLdy, dLdz, displacement, source_amps)
+    >>> artifact.shape
+    (100,)
+    """
+    dL_dx = np.asarray(dL_dx)
+    dL_dy = np.asarray(dL_dy)
+    dL_dz = np.asarray(dL_dz)
+    displacement = np.asarray(displacement)
+    source_amplitudes = np.asarray(source_amplitudes)
+
+    n_sensors, n_sources = dL_dx.shape
+
+    # Handle single time point vs time series
+    if displacement.ndim == 2:
+        # Single time point: (n_sensors, 3)
+        delta_x = displacement[:, 0]  # (n_sensors,)
+        delta_y = displacement[:, 1]
+        delta_z = displacement[:, 2]
+
+        # Convert displacement from mm to meters for physical consistency
+        delta_x_m = delta_x * 1e-3
+        delta_y_m = delta_y * 1e-3
+        delta_z_m = delta_z * 1e-3
+
+        # Compute δL = ∇L · δr for each sensor-source pair
+        # Shape: (n_sensors, n_sources)
+        delta_L = (
+            dL_dx * delta_x_m[:, np.newaxis]
+            + dL_dy * delta_y_m[:, np.newaxis]
+            + dL_dz * delta_z_m[:, np.newaxis]
+        )
+
+        # Apply source amplitudes: A = δL @ S
+        if source_amplitudes.ndim == 1:
+            # Single time point: (n_sources,)
+            return delta_L @ source_amplitudes  # (n_sensors,)
+        else:
+            # Time series: (n_sources, n_times)
+            return delta_L @ source_amplitudes  # (n_sensors, n_times)
+
+    elif displacement.ndim == 3:
+        # Time series: (n_times, n_sensors, 3)
+        n_times = displacement.shape[0]
+
+        # Convert to meters
+        displacement_m = displacement * 1e-3
+
+        # Pre-allocate output
+        if source_amplitudes.ndim == 1:
+            artifact = np.zeros((n_sensors, 1))
+            source_amplitudes = source_amplitudes[:, np.newaxis]
+        else:
+            n_times_s = source_amplitudes.shape[1]
+            if n_times != n_times_s:
+                raise ValueError(
+                    f"Time dimensions must match: displacement has {n_times}, "
+                    f"source_amplitudes has {n_times_s}"
+                )
+            artifact = np.zeros((n_sensors, n_times))
+
+        # Compute artifact at each time point
+        for t in range(n_times):
+            delta_x_m = displacement_m[t, :, 0]
+            delta_y_m = displacement_m[t, :, 1]
+            delta_z_m = displacement_m[t, :, 2]
+
+            # δL(t) = ∇L · δr(t)
+            delta_L = (
+                dL_dx * delta_x_m[:, np.newaxis]
+                + dL_dy * delta_y_m[:, np.newaxis]
+                + dL_dz * delta_z_m[:, np.newaxis]
+            )
+
+            # A(t) = δL(t) @ S(t)
+            artifact[:, t] = delta_L @ source_amplitudes[:, t]
+
+        return artifact.squeeze()
+
+    else:
+        raise ValueError(
+            f"displacement must be 2D (n_sensors, 3) or 3D (n_times, n_sensors, 3), "
+            f"got shape {displacement.shape}"
+        )
+
+
 def validate_lead_field(
     lead_field: np.ndarray,
     expected_shape: tuple[int, int] | None = None,
@@ -595,6 +833,12 @@ class LeadFieldManager:
     _cached_positions: np.ndarray | None = field(default=None, init=False, repr=False)
     _cached_metadata: dict | None = field(default=None, init=False, repr=False)
 
+    # Gradient cache fields
+    _cached_dL_dx: np.ndarray | None = field(default=None, init=False, repr=False)
+    _cached_dL_dy: np.ndarray | None = field(default=None, init=False, repr=False)
+    _cached_dL_dz: np.ndarray | None = field(default=None, init=False, repr=False)
+    _cached_grad_positions: np.ndarray | None = field(default=None, init=False, repr=False)
+
     def __post_init__(self) -> None:
         """Validate inputs."""
         self.sources = np.asarray(self.sources, dtype=np.float64)
@@ -753,11 +997,86 @@ class LeadFieldManager:
         self._cached_positions = sensor_positions.copy()
         return self._cached_L
 
+    def compute_gradient(
+        self,
+        sensor_positions: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Compute lead field gradient components (full recomputation, no caching).
+
+        Parameters
+        ----------
+        sensor_positions : np.ndarray
+            Sensor positions, shape (n_sensors, 3) in mm.
+
+        Returns
+        -------
+        dL_dx, dL_dy, dL_dz : tuple of np.ndarray
+            Gradient components, each shape (n_sensors, n_sources).
+        """
+        sensor_positions = np.asarray(sensor_positions, dtype=np.float64)
+
+        dL_dx, dL_dy, dL_dz, _ = compute_lead_field_gradient(
+            sensors=sensor_positions,
+            sources=self.sources,
+            conductivity=self.conductivity,
+            min_distance_mm=self.min_distance_mm,
+        )
+        return dL_dx, dL_dy, dL_dz
+
+    def compute_gradient_with_cache(
+        self,
+        sensor_positions: np.ndarray,
+        tolerance_mm: float = 1e-6,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Return cached gradients if positions unchanged, else recompute.
+
+        Parameters
+        ----------
+        sensor_positions : np.ndarray
+            Sensor positions, shape (n_sensors, 3) in mm.
+        tolerance_mm : float
+            Position tolerance for cache hit. Default is 1e-6 mm.
+
+        Returns
+        -------
+        dL_dx, dL_dy, dL_dz : tuple of np.ndarray
+            Gradient components, each shape (n_sensors, n_sources).
+        """
+        sensor_positions = np.asarray(sensor_positions, dtype=np.float64)
+
+        # Check for cache hit
+        if (
+            self._cached_dL_dx is not None
+            and self._cached_grad_positions is not None
+            and self._cached_grad_positions.shape == sensor_positions.shape
+            and np.allclose(sensor_positions, self._cached_grad_positions, atol=tolerance_mm)
+        ):
+            return self._cached_dL_dx, self._cached_dL_dy, self._cached_dL_dz
+
+        # Cache miss - recompute
+        dL_dx, dL_dy, dL_dz = self.compute_gradient(sensor_positions)
+        self._cached_dL_dx = dL_dx
+        self._cached_dL_dy = dL_dy
+        self._cached_dL_dz = dL_dz
+        self._cached_grad_positions = sensor_positions.copy()
+        return dL_dx, dL_dy, dL_dz
+
+    @property
+    def has_gradient_cache(self) -> bool:
+        """Whether cached gradients exist."""
+        return self._cached_dL_dx is not None
+
     def invalidate_cache(self) -> None:
-        """Clear cached lead field and positions."""
+        """Clear cached lead field, gradients, and positions."""
         self._cached_L = None
         self._cached_positions = None
         self._cached_metadata = None
+        self._cached_dL_dx = None
+        self._cached_dL_dy = None
+        self._cached_dL_dz = None
+        self._cached_grad_positions = None
 
     def get_cache_info(self) -> dict:
         """
@@ -768,11 +1087,13 @@ class LeadFieldManager:
         dict
             Cache information including:
             - is_cached: bool
+            - has_gradient_cache: bool
             - n_sensors: int or None
             - n_sources: int
         """
         return {
             "is_cached": self.is_cached,
+            "has_gradient_cache": self.has_gradient_cache,
             "n_sensors": self._cached_L.shape[0] if self._cached_L is not None else None,
             "n_sources": self.n_sources,
         }

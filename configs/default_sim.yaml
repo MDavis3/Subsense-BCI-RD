@@ -117,6 +117,56 @@ biology:
     mu: 0.01
 
 # -----------------------------------------------------------------------------
+# Phase 5: Cardiac Physics - Heartbeat Stress Test Parameters
+# -----------------------------------------------------------------------------
+cardiac_physics:
+  # Master toggle for realistic cardiac waveform (vs simple sine)
+  use_realistic_waveform: true
+
+  # Cardiac waveform shape parameters (fraction of cycle)
+  systole_fraction: 0.30       # Rapid systolic contraction (30% of cycle)
+  dicrotic_position: 0.60      # Dicrotic notch at 60% of cycle
+  dicrotic_amplitude: 0.15     # Notch amplitude as fraction of peak
+
+  # Pulse wave propagation parameters
+  propagation_velocity_m_s: 7.5  # Arterial pulse wave velocity
+  cardiac_origin: [0.0, 0.0, 0.5]  # Origin point for phase propagation (mm)
+
+# -----------------------------------------------------------------------------
+# Phase 5: Artifact Model Parameters
+# -----------------------------------------------------------------------------
+artifact_model:
+  # Use full gradient model: A(t) = ∇L · δr(t)
+  # When false, uses simpler scalar lead field model
+  use_gradient_model: true
+
+  # Artifact amplitude scaling factor
+  artifact_scale: 1.0
+
+  # Minimum distance for gradient computation (singularity avoidance)
+  min_distance_mm: 0.05
+
+# -----------------------------------------------------------------------------
+# Phase 5: Stress Test Parameters
+# -----------------------------------------------------------------------------
+stress_test:
+  # Real-time latency budget in ms
+  # Processing must complete within this window for BCI control
+  latency_budget_ms: 43
+
+  # Chunk size for streaming simulation
+  chunk_size_ms: 100
+
+  # Minimum artifact rejection requirement (dB)
+  min_rejection_db: 10
+
+  # Number of sensors for stress test
+  n_sensors: 10000
+
+  # Simulation duration for stress test (seconds)
+  duration_sec: 1.0
+
+# -----------------------------------------------------------------------------
 # Physics Constants (generally should not be modified)
 # -----------------------------------------------------------------------------
 physics:

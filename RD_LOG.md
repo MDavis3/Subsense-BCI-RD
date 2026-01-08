@@ -885,5 +885,286 @@ e2e_ms = acquire_ms + decode_ms + render_ms
 
 ---
 
+### [2026-01-07] SensorCloud Infrastructure for Dynamic Lead Field Simulation
+
+**Category**: Simulation | Physics
+**Files Modified**:
+- `src/subsense_bci/simulation/sensor_cloud.py` (new)
+- `src/subsense_bci/physics/constants.py` (added cardiac propagation constants)
+
+**Problem/Goal**:
+Phase 4 demonstrated static decoding, but real Subsense sensors will experience
+**hemodynamic drift** — position oscillation caused by cardiac pulsatility. To validate
+artifact rejection algorithms (Phase 5), we need infrastructure for time-varying sensor
+positions that produce time-varying lead fields.
+
+**Approach**:
+
+*1. SensorCloud Dataclass*
+
+Encapsulates sensor state with drift parameters:
+
+```python
+@dataclass
+class SensorCloud:
+    positions: np.ndarray           # Baseline positions (n_sensors, 3)
+    drift_amplitude: np.ndarray     # Per-sensor drift amplitude (mm)
+    drift_frequency_hz: float       # Cardiac frequency (default 1.2 Hz)
+    phase_offsets: np.ndarray       # Per-sensor phase offsets (radians)
+```
+
+*2. Hemodynamic Drift Model*
+
+Sinusoidal position modulation simulating cardiac pulsatility:
+
+$$r_i(t) = r_{0,i} + \delta r_i \cdot \sin(2\pi f_{cardiac} t + \phi_i)$$
+
+where:
+- $r_{0,i}$ = baseline position of sensor i
+- $\delta r_i$ = drift amplitude (default 50 µm)
+- $f_{cardiac}$ = cardiac frequency (default 1.2 Hz = 72 BPM)
+- $\phi_i$ = phase offset (from pulse wave propagation)
+
+*3. Pulse Wave Propagation Model*
+
+For realistic phase offsets, sensors receive the pulse wave at different times
+based on distance from the cardiac origin:
+
+$$\phi_i = 2\pi f_{cardiac} \cdot \frac{d_i}{v_{pulse}}$$
+
+where:
+- $d_i$ = distance from sensor i to cardiac origin
+- $v_{pulse}$ = pulse wave velocity (default 7.5 m/s)
+
+*4. Factory Methods*
+
+Three construction patterns for different simulation scenarios:
+
+| Factory Method | Use Case |
+|----------------|----------|
+| `from_uniform_cloud()` | Legacy: uniform distribution, random phases |
+| `from_vascular_tree()` | Anatomical: sensors along vessel segments |
+| `from_uniform_cloud_with_cardiac_propagation()` | **Phase 5**: realistic pulse propagation |
+
+**Why This Approach**:
+
+1. **Dataclass encapsulation**: Clean separation between sensor geometry and
+   dynamics. The same SensorCloud can be used with or without drift enabled.
+
+2. **Per-sensor phase offsets**: Real cardiac artifacts vary spatially. Sensors
+   near arteries experience different phases than those in capillary beds.
+
+3. **Propagation velocity model**: At 7.5 m/s pulse wave velocity, a 1mm
+   sensor cloud spans ~0.13 µs of phase delay — small but measurable for
+   artifact rejection algorithms.
+
+**Validation**:
+
+| Check | Expected | Verified |
+|-------|----------|----------|
+| Position at t=0 | baseline | ✓ |
+| Position at t=T/4 | baseline + δr | ✓ |
+| Position at t=T/2 | baseline | ✓ |
+| Phase propagation delay | d/v_pulse | ✓ |
+
+**Impact on Phase 5**:
+
+This infrastructure enables the hemodynamic artifact simulation pipeline:
+1. Generate SensorCloud with cardiac propagation
+2. Compute time-varying lead field L(t) at each timestep
+3. Forward model: X(t) = L(t) @ S(t) + N(t) produces artifact-contaminated data
+4. Test adaptive filtering algorithms for artifact rejection
+
+**References**:
+- Avolio, A. (1980). "Multi-branched model of the human arterial system" — Pulse wave velocity
+- Nichols & O'Rourke (2005). "McDonald's Blood Flow in Arteries" — Arterial hemodynamics
+
+---
+
+### [2026-01-07] Adaptive Filtering Infrastructure for Cardiac Artifact Rejection
+
+**Category**: Filtering | Phase 5 Preparation
+**Files Modified**:
+- `src/subsense_bci/filtering/adaptive_filter.py` (major expansion)
+- `configs/default_sim.yaml` (added biology/artifact_rejection section)
+
+**Problem/Goal**:
+Cardiac pulsatility at ~1.2 Hz creates artifacts that **overlap with neural bands**
+(delta/theta). Simple bandpass filtering would destroy neural signals. We need
+**adaptive filtering** that uses a cardiac reference (PPG/ECG) to selectively
+cancel artifacts while preserving neural content.
+
+**Approach**:
+
+*1. LMS Filter (Least Mean Squares)*
+
+Simple gradient descent for artifact estimation:
+
+$$w[n+1] = w[n] + \mu \cdot e[n] \cdot x[n]$$
+
+Properties:
+- Complexity: O(n_taps) per sample
+- Convergence: Slow (~1000s of samples)
+- Stability: Requires $\mu < 2/\lambda_{max}$
+
+*2. RLS Filter (Recursive Least Squares)*
+
+Optimal filtering with exponential forgetting:
+
+$$k[n] = \frac{P[n-1] x[n]}{\lambda + x[n]^T P[n-1] x[n]}$$
+$$w[n] = w[n-1] + k[n] \cdot e[n]$$
+$$P[n] = \frac{1}{\lambda}(P[n-1] - k[n] x[n]^T P[n-1])$$
+
+Properties:
+- Complexity: O(n_taps²) per sample
+- Convergence: Fast (~n_taps samples)
+- Forgetting factor: λ=0.99 (slow adaptation) to λ=0.95 (fast adaptation)
+
+*3. PhaseAwareRLSFilter (New for Subsense)*
+
+Extends RLS with **per-sensor phase compensation**:
+
+```python
+# Compute phase delay in samples
+samples_per_cycle = fs / f_cardiac
+sample_delay = (phase_offset / 2π) × samples_per_cycle
+
+# Index into reference buffer at delayed position
+delayed_idx = (buffer_idx - sample_delay) % buffer_size
+x_compensated = reference_buffer[delayed_idx]
+```
+
+This aligns the reference signal with each sensor's actual artifact timing,
+accounting for pulse wave propagation delays.
+
+*4. Harmonic Aliasing Detection*
+
+Cardiac harmonics can fall within neural bands:
+
+| Harmonic | Frequency (f=1.2Hz) | Band Overlap |
+|----------|---------------------|--------------|
+| 8th | 9.6 Hz | Alpha (8-13 Hz) |
+| 9th | 10.8 Hz | Alpha |
+| 10th | 12.0 Hz | Alpha |
+| 11th-25th | 13.2-30 Hz | Beta (13-30 Hz) |
+
+The `detect_harmonic_aliasing()` function identifies these overlaps and
+recommends additional notch filtering when adaptive filtering alone is insufficient.
+
+*5. AdaptiveFilterHook for Online Integration*
+
+Implements a pre-processing hook compatible with OnlineDecoder:
+
+```python
+hook = AdaptiveFilterHook.from_sensor_cloud(sensor_cloud, method='phase_aware_rls')
+decoder.pre_processor = hook
+# Now decoder.decode() automatically applies artifact rejection
+```
+
+**Why This Approach**:
+
+1. **RLS over LMS**: For BCI applications, fast convergence is critical. RLS
+   converges in O(n_taps) samples vs O(1000s) for LMS. The O(n_taps²) complexity
+   is acceptable for n_taps=8-32.
+
+2. **Phase-aware filtering**: Without phase compensation, the reference signal
+   is misaligned with distant sensors' artifacts, degrading rejection quality.
+
+3. **Reduced taps for latency**: Standard RLS uses 32 taps, but Phase 4 showed
+   42.7ms latency. For 10,000 sensors, we reduce to 8 taps to stay within the
+   ~43ms budget: `8² × 10000 × 100 samples ≈ 12-15ms`.
+
+4. **Forgetting factor tuning**: Non-stationary artifacts (varying heart rate,
+   movement) require faster adaptation. λ=0.95 vs standard λ=0.99.
+
+**Latency Budget Analysis**:
+
+```
+RLS per sensor:     n_taps² = 64 ops/sample (n_taps=8)
+Per chunk:          100 samples × 64 = 6,400 ops/sensor
+All sensors:        6,400 × 10,000 = 64M ops
+At ~4 GFLOP/s:      ~16ms (within budget)
+```
+
+**Validation**:
+
+| Metric | Target | Notes |
+|--------|--------|-------|
+| Artifact correlation reduction | >10 dB | Measured via `compute_artifact_rejection_snr()` |
+| Neural band distortion | <5% | Monitor alpha/beta power before/after |
+| Latency | <43ms | With n_taps=8 |
+
+**Pipeline Integration**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              PHASE 5: ARTIFACT REJECTION PIPELINE               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Raw Recording ──► AdaptiveFilterHook ──► OnlineDecoder ──► Out │
+│        │                   │                                    │
+│        │                   ▼                                    │
+│        │          PPG Reference                                 │
+│        │     (phase-compensated)                                │
+│        │                                                        │
+│        ▼                                                        │
+│  Artifact Model: A(t) = ∇L · δr(t)                              │
+│  (from SensorCloud hemodynamic drift)                           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**References**:
+- Haykin, S. (2002). "Adaptive Filter Theory" — LMS/RLS algorithms
+- Widrow, B. & Stearns, S. (1985). "Adaptive Signal Processing"
+- He et al. (2004). "Removal of ocular artifacts from EEG" — Adaptive filtering for BCI
+
+**Status**: ✅ Infrastructure COMPLETE — Ready for Phase 5 Hemodynamic Stress Testing
+
+---
+
+### [2026-01-07] Phase 5 Preparation: Heartbeat Stress Test Framework
+
+**Category**: Testing | Phase 5
+**Files Modified**:
+- `tests/test_heartbeat_stress.py` (new)
+- `src/subsense_bci/simulation/time_series.py` (added CardiacPulseGenerator)
+
+**Problem/Goal**:
+Before claiming Phase 5 complete, we need a **stress test** that validates the
+entire pipeline (SensorCloud → Dynamic Lead Field → Artifact → Rejection → Decoding)
+under realistic cardiac artifact conditions.
+
+**Approach**:
+
+*1. CardiacPulseGenerator*
+
+Realistic cardiac waveform with physiological features:
+- Asymmetric systole/diastole (30%/70% duty cycle)
+- Dicrotic notch from aortic valve closure
+- Per-sensor phase delays from pulse wave propagation
+
+*2. Stress Test Scenarios*
+
+| Scenario | Cardiac Freq | Drift Amplitude | Purpose |
+|----------|--------------|-----------------|---------|
+| Resting | 1.0 Hz (60 BPM) | 50 µm | Baseline |
+| Normal | 1.2 Hz (72 BPM) | 50 µm | Typical use |
+| Exercise | 2.5 Hz (150 BPM) | 100 µm | Extreme stress |
+| Arrhythmia | Variable | 50 µm | Non-stationary |
+
+*3. Success Criteria*
+
+| Metric | Target | Rationale |
+|--------|--------|-----------|
+| Source correlation (with artifact rejection) | r > 0.90 | Maintain Phase 4 quality |
+| Source correlation (without rejection) | r < 0.50 | Confirm artifacts are significant |
+| End-to-end latency | < 50ms | Within BCI response window |
+| Artifact rejection | > 10 dB | Meaningful noise reduction |
+
+**Status**: 🔜 Test framework ready — Awaiting Phase 5 implementation validation
+
+---
+
 <!-- Add new entries above this line -->
 

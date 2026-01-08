@@ -20,14 +20,17 @@ import numpy as np
 
 from subsense_bci.physics.constants import (
     CARDIAC_FREQUENCY_HZ,
+    CARDIAC_ORIGIN_MM,
     CLOUD_VOLUME_SIDE_MM,
     DEFAULT_RANDOM_SEED,
     DEFAULT_SENSOR_COUNT,
     HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
+    PULSE_WAVE_VELOCITY_M_S,
 )
 
 if TYPE_CHECKING:
     from subsense_bci.simulation.cloud_generator import VesselSegment
+    from subsense_bci.simulation.time_series import CardiacPulseGenerator
 
 
 @dataclass
@@ -75,6 +78,11 @@ class SensorCloud:
     drift_frequency_hz: float = CARDIAC_FREQUENCY_HZ
     phase_offsets: np.ndarray = field(default_factory=lambda: np.array([]))
     vessel_ids: np.ndarray | None = None
+
+    # Realistic cardiac waveform support (Phase 5 Heartbeat Stress Test)
+    use_realistic_cardiac: bool = False
+    cardiac_pulse_generator: "CardiacPulseGenerator | None" = None
+    drift_directions: np.ndarray | None = None  # (n_sensors, 3) unit vectors
 
     def __post_init__(self) -> None:
         """Initialize derived attributes and validate inputs."""
@@ -230,6 +238,110 @@ class SensorCloud:
             vessel_ids=vessel_ids,
         )
 
+    @classmethod
+    def from_uniform_cloud_with_cardiac_propagation(
+        cls,
+        n_sensors: int = DEFAULT_SENSOR_COUNT,
+        volume_side_mm: float = CLOUD_VOLUME_SIDE_MM,
+        drift_amplitude_mm: float = HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
+        drift_frequency_hz: float = CARDIAC_FREQUENCY_HZ,
+        cardiac_origin: np.ndarray | None = None,
+        propagation_velocity_m_s: float = PULSE_WAVE_VELOCITY_M_S,
+        seed: int = DEFAULT_RANDOM_SEED,
+    ) -> "SensorCloud":
+        """
+        Create a SensorCloud with phase offsets computed from pulse wave propagation.
+
+        This factory implements realistic cardiac artifact modeling where:
+        1. Phase offsets are computed from distance to cardiac origin
+        2. Sensors closer to the heart have earlier pulse arrival
+        3. The CardiacPulseGenerator provides asymmetric waveforms
+
+        Parameters
+        ----------
+        n_sensors : int, optional
+            Number of sensors. Default is 10,000.
+        volume_side_mm : float, optional
+            Cube side length in mm. Default is 1.0.
+        drift_amplitude_mm : float, optional
+            Hemodynamic drift amplitude in mm. Default is 0.05 (50 microns).
+        drift_frequency_hz : float, optional
+            Cardiac frequency in Hz. Default is 1.2.
+        cardiac_origin : np.ndarray, optional
+            Origin point for phase propagation (mm). Default is [0, 0, 0.5].
+        propagation_velocity_m_s : float, optional
+            Pulse wave velocity in m/s. Default is 7.5.
+        seed : int, optional
+            Random seed for reproducibility. Default is 42.
+
+        Returns
+        -------
+        SensorCloud
+            Sensor cloud with realistic cardiac propagation and drift.
+
+        Notes
+        -----
+        Phase offset = 2π × freq × distance / velocity
+
+        This models the time delay of the pressure wave propagating from
+        the heart through the arterial system.
+
+        Examples
+        --------
+        >>> cloud = SensorCloud.from_uniform_cloud_with_cardiac_propagation(
+        ...     n_sensors=1000, drift_amplitude_mm=0.05
+        ... )
+        >>> cloud.use_realistic_cardiac
+        True
+        >>> cloud.cardiac_pulse_generator is not None
+        True
+        """
+        from subsense_bci.simulation.time_series import CardiacPulseGenerator
+
+        np.random.seed(seed)
+
+        # Use default cardiac origin if not specified
+        if cardiac_origin is None:
+            cardiac_origin = CARDIAC_ORIGIN_MM.copy()
+        else:
+            cardiac_origin = np.asarray(cardiac_origin, dtype=np.float64)
+
+        # Generate uniform positions
+        half_side = volume_side_mm / 2.0
+        positions = np.random.uniform(
+            low=-half_side, high=half_side, size=(n_sensors, 3)
+        ).astype(np.float64)
+
+        # Create CardiacPulseGenerator with specified parameters
+        cardiac_generator = CardiacPulseGenerator(
+            cardiac_freq_hz=drift_frequency_hz,
+            propagation_velocity_m_s=propagation_velocity_m_s,
+            cardiac_origin=cardiac_origin,
+        )
+
+        # Compute phase offsets based on distance from cardiac origin
+        phase_offsets = cardiac_generator.compute_phase_offsets(positions)
+
+        # Uniform drift amplitude for all sensors
+        drift_amplitude = np.full(n_sensors, drift_amplitude_mm)
+
+        # Compute drift directions (radial from cardiac origin)
+        directions = positions - cardiac_origin
+        norms = np.linalg.norm(directions, axis=1, keepdims=True)
+        norms = np.where(norms < 1e-10, 1.0, norms)  # Avoid division by zero
+        drift_directions = directions / norms  # (n_sensors, 3) unit vectors
+
+        return cls(
+            positions=positions,
+            drift_amplitude=drift_amplitude,
+            drift_frequency_hz=drift_frequency_hz,
+            phase_offsets=phase_offsets,
+            vessel_ids=None,
+            use_realistic_cardiac=True,
+            cardiac_pulse_generator=cardiac_generator,
+            drift_directions=drift_directions,
+        )
+
     def get_positions_at_time(self, t: float) -> np.ndarray:
         """
         Get instantaneous sensor positions at time t.
@@ -271,6 +383,102 @@ class SensorCloud:
             displacement = self.drift_amplitude * sin_phase[:, np.newaxis]
 
         return self.positions + displacement
+
+    def get_positions_at_time_realistic(self, t: float) -> np.ndarray:
+        """
+        Get instantaneous sensor positions using realistic cardiac waveform.
+
+        Uses the CardiacPulseGenerator for physiologically accurate waveforms:
+        - Asymmetric systole/diastole (30%/70% duty cycle)
+        - Dicrotic notch from aortic valve closure
+        - Per-sensor phase delays from pulse wave propagation
+
+        Parameters
+        ----------
+        t : float
+            Time in seconds.
+
+        Returns
+        -------
+        np.ndarray
+            Instantaneous positions with shape (n_sensors, 3) in mm.
+
+        Raises
+        ------
+        ValueError
+            If use_realistic_cardiac is False or cardiac_pulse_generator is None.
+
+        Notes
+        -----
+        Falls back to get_positions_at_time() if realistic cardiac is not configured.
+        """
+        if not self.use_realistic_cardiac or self.cardiac_pulse_generator is None:
+            # Fall back to sinusoidal model
+            return self.get_positions_at_time(t)
+
+        # Generate waveform values for each sensor
+        waveforms = self.cardiac_pulse_generator.generate_waveform_vectorized(
+            np.array([t]), self.phase_offsets
+        )  # Shape: (n_sensors, 1)
+        waveforms = waveforms.squeeze()  # Shape: (n_sensors,)
+
+        # Compute displacement using drift directions if available
+        if self.drift_directions is not None:
+            displacement = (
+                self.drift_amplitude[:, np.newaxis]
+                * self.drift_directions
+                * waveforms[:, np.newaxis]
+            )
+        else:
+            # Fall back to radial direction from origin
+            norms = np.linalg.norm(self.positions, axis=1, keepdims=True)
+            safe_norms = np.maximum(norms, 1e-10)
+            radial_unit = self.positions / safe_norms
+            displacement = (
+                self.drift_amplitude[:, np.newaxis]
+                * radial_unit
+                * waveforms[:, np.newaxis]
+            )
+
+        return self.positions + displacement
+
+    def get_displacement_at_time(self, t: float) -> np.ndarray:
+        """
+        Get sensor displacement from baseline positions at time t.
+
+        Returns δr(t) = positions(t) - baseline_positions, which is the
+        displacement vector needed for the gradient-based artifact model:
+            A(t) = ∇L · δr(t)
+
+        Parameters
+        ----------
+        t : float
+            Time in seconds.
+
+        Returns
+        -------
+        np.ndarray
+            Displacement field with shape (n_sensors, 3) in mm.
+
+        Notes
+        -----
+        Uses realistic cardiac waveform if configured, otherwise sinusoidal.
+
+        Examples
+        --------
+        >>> cloud = SensorCloud.from_uniform_cloud_with_cardiac_propagation(
+        ...     n_sensors=100, drift_amplitude_mm=0.05
+        ... )
+        >>> displacement = cloud.get_displacement_at_time(0.25)  # Quarter cycle
+        >>> displacement.shape
+        (100, 3)
+        """
+        if self.use_realistic_cardiac and self.cardiac_pulse_generator is not None:
+            positions_t = self.get_positions_at_time_realistic(t)
+        else:
+            positions_t = self.get_positions_at_time(t)
+
+        return positions_t - self.positions
 
     def get_covariance_at_time(self, t: float) -> np.ndarray | None:
         """
@@ -481,6 +689,9 @@ class SensorCloud:
             drift_frequency_hz=self.drift_frequency_hz,
             phase_offsets=self.phase_offsets.copy(),
             vessel_ids=self.vessel_ids.copy() if self.vessel_ids is not None else None,
+            use_realistic_cardiac=self.use_realistic_cardiac,
+            cardiac_pulse_generator=self.cardiac_pulse_generator,  # Shared reference is OK
+            drift_directions=self.drift_directions.copy() if self.drift_directions is not None else None,
         )
 
     def __len__(self) -> int:

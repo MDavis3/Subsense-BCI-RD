@@ -16,20 +16,286 @@ Forward Model:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from subsense_bci.physics.constants import (
+    CARDIAC_DICROTIC_AMPLITUDE,
+    CARDIAC_DICROTIC_POSITION,
     CARDIAC_FREQUENCY_HZ,
+    CARDIAC_ORIGIN_MM,
+    CARDIAC_SYSTOLE_FRACTION,
     DEFAULT_RANDOM_SEED,
     DURATION_SEC,
     HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
     ME_RESONANT_FREQ_KHZ,
+    PULSE_WAVE_VELOCITY_M_S,
     SAMPLING_RATE_HZ,
     SNR_LEVEL,
 )
 from subsense_bci.physics.transfer_function import compute_lead_field, compute_me_lead_field
+
+
+@dataclass
+class CardiacPulseGenerator:
+    """
+    Generates realistic cardiac pressure waveforms with physiological accuracy.
+
+    Models the arterial pressure waveform with:
+    - Asymmetric systole/diastole (30%/70% duty cycle)
+    - Steep systolic rise (rapid ventricular ejection)
+    - Gradual diastolic decay (aortic runoff)
+    - Dicrotic notch (aortic valve closure)
+    - Sensor-specific phase delays from pulse wave propagation
+
+    The waveform is constructed piecewise:
+    - Phase 0-30%: Sigmoid systolic rise
+    - Phase 30-60%: Gradual decay toward dicrotic notch
+    - Phase 60-70%: Dicrotic notch (secondary bump)
+    - Phase 70-100%: Exponential diastolic decay
+
+    Parameters
+    ----------
+    cardiac_freq_hz : float
+        Fundamental cardiac frequency in Hz. Default 1.2 (~72 BPM).
+    systole_fraction : float
+        Fraction of cycle occupied by systole. Default 0.30 (30%).
+    dicrotic_position : float
+        Position of dicrotic notch as fraction of cycle. Default 0.60.
+    dicrotic_amplitude : float
+        Amplitude of dicrotic notch as fraction of peak. Default 0.15.
+    propagation_velocity_m_s : float
+        Pulse wave velocity for phase delay calculation. Default 7.5 m/s.
+    cardiac_origin : np.ndarray
+        Origin point for phase propagation in mm. Default [0, 0, 0.5].
+
+    Examples
+    --------
+    >>> generator = CardiacPulseGenerator()
+    >>> t = np.linspace(0, 2, 2000)
+    >>> waveform = generator.generate_waveform_vectorized(t)
+    >>> waveform.shape
+    (2000,)
+    """
+
+    cardiac_freq_hz: float = CARDIAC_FREQUENCY_HZ
+    systole_fraction: float = CARDIAC_SYSTOLE_FRACTION
+    dicrotic_position: float = CARDIAC_DICROTIC_POSITION
+    dicrotic_amplitude: float = CARDIAC_DICROTIC_AMPLITUDE
+    propagation_velocity_m_s: float = PULSE_WAVE_VELOCITY_M_S
+    cardiac_origin: np.ndarray = field(
+        default_factory=lambda: CARDIAC_ORIGIN_MM.copy()
+    )
+
+    def compute_phase_offsets(self, sensor_positions: np.ndarray) -> np.ndarray:
+        """
+        Compute per-sensor phase offsets based on distance from cardiac origin.
+
+        Phase offset = 2π × freq × distance / velocity
+
+        This models the time delay of the pressure wave propagating from the
+        heart through the arterial tree.
+
+        Parameters
+        ----------
+        sensor_positions : np.ndarray
+            Sensor coordinates with shape (n_sensors, 3) in mm.
+
+        Returns
+        -------
+        np.ndarray
+            Phase offsets in radians with shape (n_sensors,).
+        """
+        sensor_positions = np.asarray(sensor_positions)
+        origin = np.asarray(self.cardiac_origin)
+
+        # Compute Euclidean distance from cardiac origin (mm)
+        distances_mm = np.linalg.norm(sensor_positions - origin, axis=1)
+
+        # Convert mm to meters for velocity calculation
+        distances_m = distances_mm / 1000.0
+
+        # Time delay = distance / velocity
+        time_delays_s = distances_m / self.propagation_velocity_m_s
+
+        # Phase offset = 2π × freq × time_delay
+        phase_offsets = 2 * np.pi * self.cardiac_freq_hz * time_delays_s
+
+        return phase_offsets
+
+    def generate_waveform(self, t: float, phase_offset: float = 0.0) -> float:
+        """
+        Generate cardiac waveform value at a single time point.
+
+        Parameters
+        ----------
+        t : float
+            Time in seconds.
+        phase_offset : float
+            Phase offset in radians (for pulse wave propagation).
+
+        Returns
+        -------
+        float
+            Waveform amplitude at time t (normalized to [0, 1]).
+        """
+        # Compute phase within cardiac cycle [0, 1)
+        phase = (self.cardiac_freq_hz * t + phase_offset / (2 * np.pi)) % 1.0
+
+        # Piecewise waveform construction
+        if phase < self.systole_fraction:
+            # Systolic phase: steep sigmoid rise
+            # Normalize to [0, 1] within systole
+            x = phase / self.systole_fraction
+            # Sigmoid: 1 / (1 + exp(-k*(x-0.5))) scaled to [0, 1]
+            k = 12.0  # Steepness parameter
+            value = 1.0 / (1.0 + np.exp(-k * (x - 0.5)))
+            # Rescale sigmoid from ~[0.002, 0.998] to [0, 1]
+            sig_min = 1.0 / (1.0 + np.exp(k * 0.5))
+            sig_max = 1.0 / (1.0 + np.exp(-k * 0.5))
+            value = (value - sig_min) / (sig_max - sig_min)
+
+        elif phase < self.dicrotic_position:
+            # Post-systole: gradual decay toward dicrotic notch
+            # Decay from 1.0 to ~0.4 (pre-notch level)
+            x = (phase - self.systole_fraction) / (
+                self.dicrotic_position - self.systole_fraction
+            )
+            pre_notch_level = 0.4
+            value = 1.0 - (1.0 - pre_notch_level) * x
+
+        elif phase < self.dicrotic_position + 0.10:
+            # Dicrotic notch: secondary bump (10% of cycle)
+            # Creates the characteristic "notch" from aortic valve closure
+            x = (phase - self.dicrotic_position) / 0.10
+            pre_notch_level = 0.4
+            # Gaussian bump centered at x=0.5
+            notch_bump = self.dicrotic_amplitude * np.exp(-((x - 0.5) ** 2) / 0.08)
+            value = pre_notch_level + notch_bump
+
+        else:
+            # Diastolic phase: exponential decay to baseline
+            x = (phase - self.dicrotic_position - 0.10) / (
+                1.0 - self.dicrotic_position - 0.10
+            )
+            post_notch_level = 0.4 + self.dicrotic_amplitude * np.exp(-0.5**2 / 0.08)
+            # Decay from post-notch level to ~0.1 (diastolic baseline)
+            baseline = 0.1
+            value = baseline + (post_notch_level - baseline) * np.exp(-3.0 * x)
+
+        return value
+
+    def generate_waveform_vectorized(
+        self,
+        time_vector: np.ndarray,
+        phase_offsets: np.ndarray | float = 0.0,
+    ) -> np.ndarray:
+        """
+        Generate cardiac waveform for a time vector with optional phase offsets.
+
+        Parameters
+        ----------
+        time_vector : np.ndarray
+            Time vector in seconds with shape (n_samples,).
+        phase_offsets : np.ndarray or float
+            Phase offsets in radians. Can be:
+            - Scalar: Same offset for all samples
+            - 1D array shape (n_sensors,): Per-sensor offset (returns 2D)
+
+        Returns
+        -------
+        np.ndarray
+            Waveform values. Shape depends on phase_offsets:
+            - If scalar: shape (n_samples,)
+            - If (n_sensors,): shape (n_sensors, n_samples)
+        """
+        time_vector = np.asarray(time_vector)
+        phase_offsets = np.asarray(phase_offsets)
+
+        # Handle per-sensor phase offsets
+        if phase_offsets.ndim == 0:
+            # Scalar phase offset
+            return np.array(
+                [self.generate_waveform(t, float(phase_offsets)) for t in time_vector]
+            )
+        elif phase_offsets.ndim == 1:
+            # Per-sensor phase offsets: (n_sensors,)
+            n_sensors = len(phase_offsets)
+            n_samples = len(time_vector)
+            result = np.zeros((n_sensors, n_samples))
+            for i, offset in enumerate(phase_offsets):
+                for j, t in enumerate(time_vector):
+                    result[i, j] = self.generate_waveform(t, offset)
+            return result
+        else:
+            raise ValueError(
+                f"phase_offsets must be scalar or 1D, got shape {phase_offsets.shape}"
+            )
+
+    def generate_displacement_field(
+        self,
+        time_vector: np.ndarray,
+        sensor_positions: np.ndarray,
+        drift_amplitude_mm: float = HEMODYNAMIC_DRIFT_AMPLITUDE_MM,
+        drift_direction: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Generate 3D displacement field for all sensors over time.
+
+        Parameters
+        ----------
+        time_vector : np.ndarray
+            Time vector in seconds with shape (n_samples,).
+        sensor_positions : np.ndarray
+            Sensor positions with shape (n_sensors, 3) in mm.
+        drift_amplitude_mm : float
+            Maximum displacement amplitude in mm.
+        drift_direction : np.ndarray, optional
+            Unit vector for drift direction. If None, uses radial direction
+            from cardiac origin.
+
+        Returns
+        -------
+        np.ndarray
+            Displacement field with shape (n_samples, n_sensors, 3) in mm.
+            displacement[t, i, :] is the 3D displacement of sensor i at time t.
+        """
+        sensor_positions = np.asarray(sensor_positions)
+        n_sensors = sensor_positions.shape[0]
+        n_samples = len(time_vector)
+
+        # Compute per-sensor phase offsets
+        phase_offsets = self.compute_phase_offsets(sensor_positions)
+
+        # Generate waveform for each sensor
+        waveforms = self.generate_waveform_vectorized(time_vector, phase_offsets)
+        # waveforms shape: (n_sensors, n_samples)
+
+        # Compute drift directions (radial from cardiac origin if not specified)
+        if drift_direction is None:
+            origin = np.asarray(self.cardiac_origin)
+            directions = sensor_positions - origin
+            norms = np.linalg.norm(directions, axis=1, keepdims=True)
+            norms = np.where(norms < 1e-10, 1.0, norms)  # Avoid division by zero
+            directions = directions / norms  # (n_sensors, 3)
+        else:
+            drift_direction = np.asarray(drift_direction)
+            drift_direction = drift_direction / np.linalg.norm(drift_direction)
+            directions = np.tile(drift_direction, (n_sensors, 1))  # (n_sensors, 3)
+
+        # Compute displacement: amplitude * waveform * direction
+        # waveforms: (n_sensors, n_samples) -> transpose to (n_samples, n_sensors)
+        # directions: (n_sensors, 3)
+        displacement = np.zeros((n_samples, n_sensors, 3))
+        for t_idx in range(n_samples):
+            # Scale each sensor's direction by its waveform value
+            displacement[t_idx] = (
+                drift_amplitude_mm * waveforms[:, t_idx, np.newaxis] * directions
+            )
+
+        return displacement
 
 
 def get_project_root() -> Path:
@@ -330,14 +596,25 @@ def generate_ppg_reference(
     time_vector: np.ndarray,
     cardiac_freq_hz: float = CARDIAC_FREQUENCY_HZ,
     seed: int = DEFAULT_RANDOM_SEED,
+    use_realistic_waveform: bool = False,
+    cardiac_generator: CardiacPulseGenerator | None = None,
 ) -> np.ndarray:
     """
     Generate a simulated PPG (photoplethysmography) reference signal.
 
-    The PPG waveform approximates the cardiac pulse wave with:
+    Two modes are available:
+    1. Legacy mode (use_realistic_waveform=False): Sine + harmonic approximation
+    2. Realistic mode (use_realistic_waveform=True): CardiacPulseGenerator waveform
+
+    The legacy PPG waveform approximates the cardiac pulse wave with:
     - Fundamental at cardiac frequency
     - Second harmonic for dicrotic notch characteristic
     - Small phase noise for physiological variability
+
+    The realistic waveform provides:
+    - Asymmetric systole/diastole
+    - Proper dicrotic notch timing
+    - Physiologically accurate pressure profile
 
     Parameters
     ----------
@@ -347,6 +624,12 @@ def generate_ppg_reference(
         Cardiac frequency in Hz. Default is 1.2 (~72 BPM).
     seed : int, optional
         Random seed for phase noise. Default is 42.
+    use_realistic_waveform : bool, optional
+        If True, use CardiacPulseGenerator for realistic waveform.
+        If False, use legacy sine + harmonic model. Default is False.
+    cardiac_generator : CardiacPulseGenerator, optional
+        Pre-configured generator. If None and use_realistic_waveform=True,
+        creates a new generator with default parameters.
 
     Returns
     -------
@@ -354,6 +637,20 @@ def generate_ppg_reference(
         PPG reference signal with shape (n_samples,).
         Normalized to have unit amplitude.
     """
+    if use_realistic_waveform:
+        # Use CardiacPulseGenerator for realistic waveform
+        if cardiac_generator is None:
+            cardiac_generator = CardiacPulseGenerator(cardiac_freq_hz=cardiac_freq_hz)
+
+        # Generate waveform (no phase offset for reference signal)
+        ppg = cardiac_generator.generate_waveform_vectorized(time_vector, phase_offsets=0.0)
+
+        # Normalize to [-1, 1] range
+        ppg = 2.0 * (ppg - ppg.min()) / (ppg.max() - ppg.min()) - 1.0
+
+        return ppg
+
+    # Legacy mode: sine + harmonic
     np.random.seed(seed + 500)
 
     # Small phase jitter for physiological variability

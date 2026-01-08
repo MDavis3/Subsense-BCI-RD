@@ -85,6 +85,28 @@ HEMODYNAMIC_DRIFT_AMPLITUDE_MM: float = 0.05  # 50 microns typical vessel pulsat
 CARDIAC_FREQUENCY_HZ: float = 1.2  # ~72 BPM resting heart rate
 
 # =============================================================================
+# Cardiac Pulse Wave Propagation - Phase 5 Heartbeat Stress Test
+# =============================================================================
+# Reference: Nichols & O'Rourke, "McDonald's Blood Flow in Arteries"
+
+# Pulse wave velocity in arterial system (m/s)
+# Typical range: 5-15 m/s depending on vessel stiffness and age
+PULSE_WAVE_VELOCITY_M_S: float = 7.5
+
+# Cardiac waveform timing parameters (fraction of cardiac cycle)
+CARDIAC_SYSTOLE_FRACTION: float = 0.30  # 30% systolic phase (rapid contraction)
+CARDIAC_DICROTIC_POSITION: float = 0.60  # Dicrotic notch at 60% of cycle
+CARDIAC_DICROTIC_AMPLITUDE: float = 0.15  # Notch amplitude as fraction of peak
+
+# Default cardiac origin for pulse wave propagation (mm from domain center)
+# Represents approximate heart location relative to sensor cloud
+CARDIAC_ORIGIN_MM: np.ndarray = np.array([0.0, 0.0, 0.5])
+
+# Real-time processing latency budget (ms)
+# Must complete chunk processing within this window for BCI control
+REALTIME_LATENCY_BUDGET_MS: float = 43.0
+
+# =============================================================================
 # Vascular Geometry Parameters
 # =============================================================================
 
