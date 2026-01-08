@@ -84,10 +84,67 @@ for chunk, timestamp in streamer.get_chunks(chunk_size_ms=100):
     print(f"t={timestamp:.2f}s | latency={result.latency_ms:.1f}ms")
 ```
 
+## R&D Signal Bench
+
+The **Signal Bench** is an interactive Streamlit dashboard for exploring cardiac artifact rejection in BCI systems. Designed for non-software researchers (biologists, PIs) to experiment with parameters without writing code.
+
+### Launching the Dashboard
+
+```bash
+# One-click demo with standard cardiac preset
+python run_demo.py
+
+# Or launch Streamlit directly
+streamlit run src/subsense_bci/dashboard/streamlit_app.py
+
+# Or via installed command (after pip install -e .)
+subsense-bench
+```
+
+### Dashboard Features
+
+- **Interactive Parameter Control**: Adjust sensor count (up to 10k), filter type (LMS/RLS/PhaseAwareRLS), pulse wave velocity, and movement noise scale in real-time
+- **Side-by-Side Visualization**: Compare raw signal, cleaned signal, and residual error
+- **Automatic Validation**: Nyquist theorem checks and real-time budget warnings
+- **Preset Configurations**: Load "Standard Cardiac", "Exercise Stress", or "High-Density" scenarios with one click
+- **Nanoparticle Drift Toggle**: Experimental placeholder for SubSense 2026 roadmap
+
+### Theoretical Basis: Lead Field Gradient Model
+
+Cardiac artifacts arise from hemodynamic pulsation displacing sensors. The artifact model uses the gradient of the lead field:
+
+$$A(t) = \nabla L \cdot \delta r(t)$$
+
+where:
+- $\nabla L = -\hat{r} / (4\pi\sigma r^2)$ is the lead field gradient (V/A/mm)
+- $\delta r(t)$ is sensor displacement from cardiac pulsation (~50 μm)
+
+This linearized model is accurate for small displacements typical of intravascular hemodynamic drift.
+
+### Signal Bench Performance Benchmarks
+
+| Configuration | Sensors | Filter | Taps | Latency | Budget (43ms) |
+|---------------|---------|--------|------|---------|---------------|
+| Demo Preset | 1,000 | PhaseAwareRLS | 8 | ~3ms | ✅ OK |
+| Medium Scale | 5,000 | RLS | 16 | ~25ms | ✅ OK |
+| Full Scale | 10,000 | RLS | 8 | ~15ms | ✅ OK |
+| Full Scale | 10,000 | RLS | 32 | ~48ms | ⚠️ WARNING |
+
+### Common Researcher Errors
+
+1. **Nyquist Violation**: Ensure `sampling_rate > 2 × max(source_frequencies)`. The dashboard validates this automatically and provides corrective suggestions.
+
+2. **Forgetting Factor Mismatch**: Use λ=0.95 for non-stationary artifacts (cardiac), λ=0.99 for stationary noise. The dashboard recommends optimal values.
+
+3. **Over-tapping**: More taps ≠ better performance. For 10k sensors, `n_taps > 16` exceeds the 43ms real-time budget. Use 8 taps for PhaseAwareRLS.
+
+4. **Phase Offset Neglect**: Always use `PhaseAwareRLS` (not standard `RLS`) for cardiac artifacts — it compensates for pulse wave propagation delays across the sensor cloud.
+
 ## Project Structure
 
 ```
 subsense-bci-rd/
+├── run_demo.py               # One-click Signal Bench demo
 ├── configs/
 │   └── default_sim.yaml      # Tunable simulation parameters
 ├── data/
@@ -102,10 +159,15 @@ subsense-bci-rd/
 │   ├── physics/              # Transfer functions, constants
 │   ├── filtering/            # ICA, unmixing, online decoder
 │   ├── simulation/           # Cloud generators, streamer
-│   └── visualization/        # Dark lab theme
+│   ├── visualization/        # Dark lab theme
+│   ├── dashboard/            # Streamlit Signal Bench
+│   ├── validation/           # Input validators, Nyquist checks
+│   └── presets/              # Demo presets for Signal Bench
 ├── tests/
-│   ├── test_physics.py       # Lead field validation (17 tests)
-│   └── test_unmixing.py      # ICA pipeline validation (9 tests)
+│   ├── test_physics.py         # Lead field validation (24 tests)
+│   ├── test_unmixing.py        # ICA pipeline validation (9 tests)
+│   ├── test_validation.py      # Input validation tests (27 tests)
+│   └── test_heartbeat_stress.py # Cardiac artifact tests (17 tests)
 ├── pyproject.toml            # Package configuration
 └── RD_LOG.md                 # Research decisions audit trail
 ```
@@ -120,7 +182,7 @@ pytest tests/ -v
 pytest tests/ --cov=subsense_bci --cov-report=term-missing
 ```
 
-**Current status: 26 tests passing**
+**Current status: 77 tests passing**
 
 ## Configuration
 

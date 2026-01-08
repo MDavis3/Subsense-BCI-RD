@@ -28,6 +28,8 @@ dependencies = [
     "scikit-learn>=1.3.0",
     "matplotlib>=3.7.0",
     "pyyaml>=6.0",
+    "streamlit>=1.28.0",
+    "plotly>=5.18.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +49,9 @@ full = [
     "jupyterlab>=4.0.0",
     "ipywidgets>=8.0.0",
 ]
+
+[project.scripts]
+subsense-bench = "subsense_bci.dashboard:main"
 
 [project.urls]
 Repository = "https://github.com/subsense/subsense-bci-rd"

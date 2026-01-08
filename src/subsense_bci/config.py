@@ -136,6 +136,11 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     dict
         Configuration dictionary.
 
+    Raises
+    ------
+    None
+        This function never raises; it gracefully falls back to defaults.
+
     Examples
     --------
     >>> cfg = load_config()
@@ -150,12 +155,78 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         config_path = Path(config_path)
 
     if config_path.exists():
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-        return config
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+            if config is None:
+                # Empty YAML file
+                return get_default_config()
+            return config
+        except yaml.YAMLError:
+            # Malformed YAML - fall back to defaults silently
+            # For detailed error info, use validation.validate_config_file()
+            return get_default_config()
+        except IOError:
+            # File read error - fall back to defaults
+            return get_default_config()
     else:
         # Fallback to hardcoded defaults
         return get_default_config()
+
+
+def load_config_safe(
+    config_path: str | Path | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """
+    Load configuration with detailed error reporting.
+
+    Unlike load_config(), this function returns error messages
+    for debugging and user feedback.
+
+    Parameters
+    ----------
+    config_path : str or Path, optional
+        Path to YAML config file.
+
+    Returns
+    -------
+    tuple[dict, list[str]]
+        (config_dict, error_messages). Config is always valid (defaults used on error).
+        error_messages is empty if load succeeded.
+
+    Examples
+    --------
+    >>> cfg, errors = load_config_safe("bad_config.yaml")
+    >>> if errors:
+    ...     print("Warnings:", errors)
+    """
+    errors = []
+
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+    else:
+        config_path = Path(config_path)
+
+    if not config_path.exists():
+        errors.append(f"Config file not found: {config_path}. Using defaults.")
+        return get_default_config(), errors
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        if config is None:
+            errors.append(f"Config file is empty: {config_path}. Using defaults.")
+            return get_default_config(), errors
+        return config, errors
+    except yaml.YAMLError as e:
+        errors.append(
+            f"YAML parse error in {config_path}: {e}. "
+            "Check indentation and syntax. Using defaults."
+        )
+        return get_default_config(), errors
+    except IOError as e:
+        errors.append(f"Cannot read {config_path}: {e}. Using defaults.")
+        return get_default_config(), errors
 
 
 def save_config(config: dict[str, Any], config_path: str | Path) -> None:

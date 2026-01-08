@@ -119,3 +119,25 @@ VESSEL_SEGMENT_LENGTH_MM: float = 0.3
 VESSEL_RADIAL_STD_MM: float = 0.05  # Gaussian spread from vessel axis
 VESSEL_AXIAL_DENSITY: float = 100.0  # Sensors per mm along vessel
 
+# =============================================================================
+# R&D Signal Bench Parameters
+# =============================================================================
+
+# Nyquist validation thresholds
+# We recommend fs >= 2.5 * f_max for robust anti-aliasing margin
+MINIMUM_OVERSAMPLING_FACTOR: float = 2.5
+
+# Budget warning thresholds
+# RLS at high sensor counts can exceed real-time budget
+RLS_BUDGET_WARNING_THRESHOLD_SENSORS: int = 5000  # Warn if RLS + >5k sensors
+
+# =============================================================================
+# Nanoparticle Drift Modeling (Placeholder for Phase 6)
+# =============================================================================
+# Reference: Einstein-Stokes relation for Brownian motion in fluid
+# D = k_B * T / (6 * pi * eta * r)
+# For 100nm particles in blood at 37C: D ~ 4.4e-12 m^2/s = 4.4e-6 mm^2/s
+
+NANOPARTICLE_BROWNIAN_DIFFUSION_MM2_S: float = 4.4e-6  # Estimated diffusion coefficient
+NANOPARTICLE_DRIFT_ENABLED_DEFAULT: bool = False  # Placeholder toggle
+

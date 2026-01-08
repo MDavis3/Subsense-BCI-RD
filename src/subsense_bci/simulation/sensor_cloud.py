@@ -694,6 +694,79 @@ class SensorCloud:
             drift_directions=self.drift_directions.copy() if self.drift_directions is not None else None,
         )
 
+    # =========================================================================
+    # Nanoparticle Drift Modeling (Placeholder for SubSense 2026 Roadmap)
+    # =========================================================================
+
+    def enable_nanoparticle_drift(
+        self,
+        diffusion_coefficient_mm2_s: float = 4.4e-6,
+        enabled: bool = True,
+    ) -> None:
+        """
+        Enable/disable nanoparticle Brownian drift modeling.
+
+        This is a PLACEHOLDER for future Phase 6 implementation.
+        Currently stores parameters but does not apply actual drift.
+
+        The full implementation will model random diffusion of nanoparticles
+        in addition to cardiac-driven motion, based on the Einstein-Stokes
+        relation for Brownian motion in fluid:
+
+            D = k_B * T / (6 * pi * eta * r)
+
+        For 100nm particles in blood at 37C: D ~ 4.4e-6 mm^2/s
+
+        Parameters
+        ----------
+        diffusion_coefficient_mm2_s : float, optional
+            Brownian diffusion coefficient in mm^2/s. Default is 4.4e-6,
+            which corresponds to 100nm nanoparticles in blood at 37C.
+        enabled : bool, optional
+            Toggle for drift modeling. Default is True.
+
+        Notes
+        -----
+        PLACEHOLDER: Full implementation pending Phase 6 development.
+
+        Current behavior:
+        - Stores parameters in instance attributes
+        - Does NOT modify get_positions_at_time() output yet
+
+        Future implementation will:
+        - Add Wiener process (random walk) to sensor positions
+        - Scale by sqrt(2 * D * dt) per timestep
+        - Account for boundary conditions (vessel walls)
+
+        References
+        ----------
+        Einstein, A. (1905). "On the Movement of Small Particles Suspended
+        in Stationary Liquids Required by the Molecular-Kinetic Theory of Heat."
+
+        See Also
+        --------
+        subsense_bci.physics.constants.NANOPARTICLE_BROWNIAN_DIFFUSION_MM2_S
+
+        Examples
+        --------
+        >>> cloud = SensorCloud.from_uniform_cloud(n_sensors=1000)
+        >>> cloud.enable_nanoparticle_drift(enabled=True)
+        >>> cloud.nanoparticle_drift_enabled
+        True
+        """
+        self._nanoparticle_drift_enabled = enabled
+        self._diffusion_coefficient_mm2_s = diffusion_coefficient_mm2_s
+
+    @property
+    def nanoparticle_drift_enabled(self) -> bool:
+        """Check if nanoparticle drift modeling is enabled."""
+        return getattr(self, "_nanoparticle_drift_enabled", False)
+
+    @property
+    def diffusion_coefficient_mm2_s(self) -> float:
+        """Get the Brownian diffusion coefficient (mm^2/s)."""
+        return getattr(self, "_diffusion_coefficient_mm2_s", 4.4e-6)
+
     def __len__(self) -> int:
         """Return number of sensors."""
         return self._n_sensors
