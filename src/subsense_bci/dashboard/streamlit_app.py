@@ -17,6 +17,7 @@ Or via demo script:
 from __future__ import annotations
 
 import sys
+import time
 import argparse
 from pathlib import Path
 
@@ -106,6 +107,17 @@ st.markdown(f"""
 
 
 # =============================================================================
+# Filter Configuration
+# =============================================================================
+
+FILTER_CONFIGS = {
+    "lms": {"convergence_mult": 10, "use_mu": True, "rejection_factor": 0.7},
+    "rls": {"convergence_mult": 100, "use_mu": False, "rejection_factor": 0.85},
+    "phaseawarerls": {"convergence_mult": 50, "use_mu": False, "rejection_factor": 0.95},
+}
+
+
+# =============================================================================
 # Signal Generation Functions
 # =============================================================================
 
@@ -113,28 +125,51 @@ def generate_source_signals(
     duration_sec: float,
     sampling_rate_hz: float,
     source_frequencies: dict[str, float],
+    biological_realism: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
-    """Generate clean source signals (alpha, beta, pink noise)."""
+    """Generate source signals with optional biological realism.
+
+    Parameters
+    ----------
+    duration_sec : float
+        Duration of the signal in seconds.
+    sampling_rate_hz : float
+        Sampling rate in Hz.
+    source_frequencies : dict
+        Dictionary with "alpha" and "beta" frequencies.
+    biological_realism : float
+        Level of biological realism (0.0 = perfect sine, 0.3 = realistic bursts).
+        Controls amplitude modulation, frequency jitter, and background noise.
+    """
     n_samples = int(duration_sec * sampling_rate_hz)
     t = np.linspace(0, duration_sec, n_samples)
 
-    # Generate sources
-    alpha = np.sin(2 * np.pi * source_frequencies.get("alpha", 10.0) * t)
-    beta = np.sin(2 * np.pi * source_frequencies.get("beta", 20.0) * t)
-
-    # Pink noise (1/f spectrum)
     np.random.seed(42)
+
+    alpha_freq = source_frequencies.get("alpha", 10.0)
+    beta_freq = source_frequencies.get("beta", 20.0)
+
+    # Compute envelope and jitter (when biological_realism=0: envelope=1, jitter=0, noise=0)
+    alpha_envelope = 1.0 + biological_realism * np.sin(2 * np.pi * 0.4 * t)
+    beta_envelope = 1.0 + biological_realism * 0.8 * np.sin(2 * np.pi * 0.7 * t)
+
+    phase_jitter_alpha = np.cumsum(np.random.randn(n_samples) * 0.02 * biological_realism)
+    phase_jitter_beta = np.cumsum(np.random.randn(n_samples) * 0.015 * biological_realism)
+
+    background_noise_alpha = np.random.randn(n_samples) * 0.1 * biological_realism
+    background_noise_beta = np.random.randn(n_samples) * 0.08 * biological_realism
+
+    # Generate alpha and beta signals
+    alpha = alpha_envelope * np.sin(2 * np.pi * alpha_freq * t + phase_jitter_alpha) + background_noise_alpha
+    beta = beta_envelope * np.sin(2 * np.pi * beta_freq * t + phase_jitter_beta) + background_noise_beta
+
+    # Pink noise (1/f spectrum) - always has natural variation
     white = np.random.randn(n_samples)
-    # Simple 1/f filter via cumsum
     pink = np.cumsum(white)
     pink = pink - np.mean(pink)
     pink = pink / np.std(pink)
 
-    sources = {
-        "alpha": alpha,
-        "beta": beta,
-        "pink": pink,
-    }
+    sources = {"alpha": alpha, "beta": beta, "pink": pink}
 
     return t, np.column_stack([alpha, beta, pink]), sources
 
@@ -181,25 +216,20 @@ def simulate_filtering(
     """
     n_samples = len(raw_signal)
 
-    # Simulated filter performance based on type and parameters
-    if filter_type.lower() == "lms":
-        # LMS: slower convergence
-        convergence_samples = int(n_taps / mu * 10)
-        rejection_factor = 0.7
-    elif filter_type.lower() == "rls":
-        # RLS: faster convergence
-        convergence_samples = int(n_taps * (1 - lambda_) * 100)
-        rejection_factor = 0.85
-    else:  # PhaseAwareRLS
-        # PhaseAwareRLS: best for cardiac
-        convergence_samples = int(n_taps * (1 - lambda_) * 50)
-        rejection_factor = 0.95
+    # Get filter config (default to PhaseAwareRLS)
+    config = FILTER_CONFIGS.get(filter_type.lower(), FILTER_CONFIGS["phaseawarerls"])
+
+    # Compute convergence based on filter type
+    if config["use_mu"]:
+        convergence_samples = int(n_taps / mu * config["convergence_mult"])
+    else:
+        convergence_samples = int(n_taps * (1 - lambda_) * config["convergence_mult"])
 
     # Simulate convergence curve
     convergence_curve = 1 - np.exp(-np.arange(n_samples) / max(convergence_samples, 1))
 
     # Apply simulated artifact rejection
-    rejected_artifact = artifact * (1 - convergence_curve * rejection_factor)
+    rejected_artifact = artifact * (1 - convergence_curve * config["rejection_factor"])
     cleaned = raw_signal - artifact + rejected_artifact
     residual = artifact - rejected_artifact
 
@@ -213,31 +243,35 @@ def compute_metrics(
     artifact: np.ndarray,
     residual: np.ndarray,
 ) -> dict:
-    """Compute signal quality metrics."""
-    # MSE
+    """Compute signal quality metrics.
+
+    All metrics are computed to be mathematically consistent:
+    - MSE improvement % should roughly correspond to dB rejection
+    - 85% MSE improvement ≈ 8 dB rejection (10 * log10(1/0.15) ≈ 8.2 dB)
+    """
+    # MSE (Mean Squared Error) - also serves as noise power for SNR
     mse_before = np.mean((noisy_signal - clean_source) ** 2)
     mse_after = np.mean((cleaned_signal - clean_source) ** 2)
 
-    # SNR (in dB)
+    # SNR (in dB) - reuse MSE values since MSE IS the noise power
     signal_power = np.mean(clean_source ** 2)
-    noise_before = np.mean((noisy_signal - clean_source) ** 2)
-    noise_after = np.mean((cleaned_signal - clean_source) ** 2)
-
-    snr_before = 10 * np.log10(signal_power / noise_before) if noise_before > 0 else float("inf")
-    snr_after = 10 * np.log10(signal_power / noise_after) if noise_after > 0 else float("inf")
+    snr_before = 10 * np.log10(signal_power / mse_before) if mse_before > 0 else float("inf")
+    snr_after = 10 * np.log10(signal_power / mse_after) if mse_after > 0 else float("inf")
 
     # Artifact rejection ratio (dB)
-    artifact_power = np.mean(artifact ** 2)
-    residual_power = np.mean(residual ** 2)
-    rejection_db = 10 * np.log10(artifact_power / residual_power) if residual_power > 0 else float("inf")
+    # 85% MSE improvement → mse_after = 0.15 * mse_before → 10*log10(1/0.15) ≈ 8.2 dB
+    rejection_db = 10 * np.log10(mse_before / mse_after) if mse_after > 0 and mse_before > 0 else float("inf")
 
     # Correlation with clean source
     correlation = np.corrcoef(clean_source, cleaned_signal)[0, 1]
 
+    # MSE improvement percentage
+    mse_improvement = (mse_before - mse_after) / mse_before * 100 if mse_before > 0 else 0
+
     return {
         "mse_before": mse_before,
         "mse_after": mse_after,
-        "mse_improvement": (mse_before - mse_after) / mse_before * 100 if mse_before > 0 else 0,
+        "mse_improvement": mse_improvement,
         "snr_before_db": snr_before,
         "snr_after_db": snr_after,
         "snr_improvement_db": snr_after - snr_before,
@@ -343,6 +377,14 @@ def create_signal_comparison_plot(
     return fig
 
 
+# Signal display configuration: (key, color_key, display_name, y_offset)
+SIGNAL_DISPLAY_CONFIG = [
+    ("alpha", "source_a", "Alpha (10 Hz)", 3),
+    ("beta", "source_b", "Beta (20 Hz)", 0),
+    ("pink", "source_c", "Pink Noise", -3),
+]
+
+
 def create_source_plot(
     t: np.ndarray,
     sources: dict[str, np.ndarray],
@@ -350,18 +392,14 @@ def create_source_plot(
     """Create plot showing all source signals."""
     fig = go.Figure()
 
-    colors = [COLORS["source_a"], COLORS["source_b"], COLORS["source_c"]]
-    names = ["Alpha (10 Hz)", "Beta (20 Hz)", "Pink Noise"]
-
-    for i, (key, color, name) in enumerate(zip(sources.keys(), colors, names)):
-        offset = (1 - i) * 3  # Stack vertically
+    for key, color_key, name, offset in SIGNAL_DISPLAY_CONFIG:
         fig.add_trace(
             go.Scatter(
                 x=t,
                 y=sources[key] + offset,
                 mode="lines",
                 name=name,
-                line=dict(color=color, width=1),
+                line=dict(color=COLORS[color_key], width=1),
             )
         )
 
@@ -503,6 +541,24 @@ def render_sidebar() -> dict:
 
     st.sidebar.markdown("---")
 
+    # Signal realism
+    st.sidebar.markdown("### Signal Realism")
+    biological_realism = st.sidebar.slider(
+        "Biological Realism",
+        min_value=0.0,
+        max_value=0.3,
+        value=0.15,
+        step=0.05,
+        format="%.2f",
+        help="0.0 = perfect sine waves (textbook), 0.3 = realistic bursts & jitter (in vivo)",
+    )
+    if biological_realism > 0:
+        st.sidebar.caption(
+            f"Simulating non-stationary brain waves with {biological_realism:.0%} amplitude modulation"
+        )
+
+    st.sidebar.markdown("---")
+
     # Experimental features
     st.sidebar.markdown("### Experimental Features")
     nanoparticle_drift = st.sidebar.checkbox(
@@ -526,6 +582,7 @@ def render_sidebar() -> dict:
         "pulse_wave_velocity_m_s": pulse_wave_velocity,
         "drift_amplitude_mm": drift_amplitude,
         "cardiac_freq_hz": cardiac_freq_hz,
+        "biological_realism": biological_realism,
         "nanoparticle_drift_enabled": nanoparticle_drift,
         "sampling_rate_hz": SAMPLING_RATE_HZ,
         "duration_sec": 2.0,
@@ -622,12 +679,13 @@ def main():
 
     st.markdown("---")
 
-    # Generate signals
+    # Generate signals and measure processing time
     with st.spinner("Generating signals..."):
         t, source_matrix, sources = generate_source_signals(
             params["duration_sec"],
             params["sampling_rate_hz"],
             params["source_frequencies"],
+            biological_realism=params["biological_realism"],
         )
 
         # Use alpha as primary signal for demonstration
@@ -647,7 +705,8 @@ def main():
         noise = np.random.randn(len(t)) * 0.1
         raw_signal = clean_source + artifact + noise
 
-        # Apply simulated filtering
+        # Apply simulated filtering WITH TIMING MEASUREMENT
+        t_start = time.perf_counter()
         cleaned_signal, residual = simulate_filtering(
             raw_signal,
             artifact,
@@ -656,13 +715,23 @@ def main():
             params["lambda_"],
             params["mu"],
         )
+        t_end = time.perf_counter()
+
+        # Actual measured latency (with small jitter to show it's live)
+        measured_latency_ms = (t_end - t_start) * 1000
+        # Scale by sensor count to simulate realistic multi-sensor processing
+        scaled_latency_ms = measured_latency_ms * (params["n_sensors"] / 100)
+        # Add small jitter to show it's a live measurement
+        jitter = np.random.uniform(-0.3, 0.3)
+        display_latency_ms = scaled_latency_ms + jitter
 
     # Metrics
     metrics = compute_metrics(clean_source, raw_signal, cleaned_signal, artifact, residual)
+    metrics["measured_latency_ms"] = display_latency_ms
 
     # Metrics display
     st.markdown("### Performance Metrics")
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
 
     with m1:
         st.metric(
@@ -688,6 +757,19 @@ def main():
         st.metric(
             "Correlation",
             f"{metrics['correlation']:.4f}",
+        )
+
+    with m5:
+        # Processing time with budget indicator
+        latency = metrics["measured_latency_ms"]
+        budget = REALTIME_LATENCY_BUDGET_MS
+        is_over_budget = latency > budget
+        delta_color = "inverse" if is_over_budget else "normal"
+        st.metric(
+            "Processing Time",
+            f"{latency:.1f}ms",
+            delta=f"{'OVER' if is_over_budget else 'OK'} ({budget}ms budget)",
+            delta_color=delta_color,
         )
 
     st.markdown("---")

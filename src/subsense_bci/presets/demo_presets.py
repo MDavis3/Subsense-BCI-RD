@@ -184,6 +184,38 @@ NANOPARTICLE_RESEARCH: dict[str, Any] = {
 }
 
 
+STRESS_TEST_10K: dict[str, Any] = {
+    "name": "10K Sensor Stress Test (Budget Warning)",
+    "description": (
+        "Deliberately exceeds 43ms real-time budget to demonstrate warning system. "
+        "Uses RLS with 32 taps at 10,000 sensors - expect RED budget indicator."
+    ),
+    # Sensor configuration
+    "n_sensors": 10000,
+    # Adaptive filter settings (intentionally expensive)
+    "filter_type": "RLS",  # O(n²) complexity - NOT PhaseAwareRLS
+    "n_taps": 32,  # High tap count to exceed budget
+    "lambda_": 0.95,
+    "mu": 0.01,
+    # Cardiac parameters
+    "pulse_wave_velocity_m_s": 7.5,
+    "drift_amplitude_mm": 0.05,
+    "cardiac_freq_hz": 1.2,
+    # Temporal parameters
+    "sampling_rate_hz": 1000.0,
+    "duration_sec": 2.0,
+    "chunk_size_ms": 100.0,
+    # Signal parameters
+    "snr_level": 5.0,
+    "source_frequencies": {"alpha": 10.0, "beta": 20.0},
+    # Display
+    "display_sensors": 100,
+    "window_ms": 500.0,
+    # Experimental features
+    "nanoparticle_drift_enabled": False,
+}
+
+
 # =============================================================================
 # Preset Registry
 # =============================================================================
@@ -195,6 +227,7 @@ PRESETS: dict[str, dict[str, Any]] = {
     "high_density": HIGH_DENSITY,
     "low_latency": LOW_LATENCY,
     "nanoparticle_research": NANOPARTICLE_RESEARCH,
+    "stress_test_10k": STRESS_TEST_10K,
 }
 
 
@@ -210,7 +243,7 @@ def list_presets() -> list[str]:
     Examples
     --------
     >>> list_presets()
-    ['standard_cardiac', 'exercise_stress', 'high_density', 'low_latency', 'nanoparticle_research']
+    ['standard_cardiac', 'exercise_stress', 'high_density', 'low_latency', 'nanoparticle_research', 'stress_test_10k']
     """
     return list(PRESETS.keys())
 
@@ -272,7 +305,4 @@ def get_preset_names_and_descriptions() -> list[tuple[str, str, str]]:
     >>> presets[0]
     ('standard_cardiac', 'Standard Cardiac Interference', 'Typical resting...')
     """
-    result = []
-    for key, preset in PRESETS.items():
-        result.append((key, preset["name"], preset["description"]))
-    return result
+    return [(key, preset["name"], preset["description"]) for key, preset in PRESETS.items()]
