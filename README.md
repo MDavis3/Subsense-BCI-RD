@@ -2,6 +2,62 @@
 
 Neural signal processing pipeline for magnetoelectric (ME) nanoparticle brain-computer interfaces.
 
+---
+
+## 🚀 Quick Start (2 minutes)
+
+### Prerequisites
+- Python 3.9+ 
+- pip
+
+### Step 1: Clone & Install
+
+```bash
+git clone https://github.com/MDavis3/Subsense-BCI-RD.git
+cd Subsense-BCI-RD
+pip install -e .
+```
+
+### Step 2: Run the Full Demo
+
+```bash
+# Option A: Run all 4 phases sequentially (generates visualizations)
+python notebooks/visualize_cloud.py      # Phase 1: Sensor cloud
+python notebooks/visualize_signals.py    # Phase 2: Signal mixing
+python notebooks/validate_unmixing.py    # Phase 3: Source recovery
+python notebooks/realtime_dashboard.py   # Phase 4: Real-time decoding
+```
+
+```bash
+# Option B: Launch interactive Signal Bench dashboard
+python run_demo.py
+```
+
+### Step 3: Verify It Works
+
+After running Phase 3 (`validate_unmixing.py`), you should see:
+
+```
+UNMIXING RESULTS
+================
+Source A (10Hz Alpha): r = 0.9948 [Excellent]
+Source B (20Hz Beta):  r = 0.9876 [Excellent]  
+Source C (Pink Noise): r = 0.9999 [Excellent]
+```
+
+**That's it!** You've just recovered 3 neural signals from 10,000 noisy sensor measurements.
+
+### What Each Phase Does
+
+| Phase | Command | Output | Time |
+|-------|---------|--------|------|
+| 1 | `visualize_cloud.py` | 3D sensor positions + lead field | ~5s |
+| 2 | `visualize_signals.py` | Mixed sensor recordings | ~3s |
+| 3 | `validate_unmixing.py` | Recovered sources (r=0.989) | ~10s |
+| 4 | `realtime_dashboard.py` | Animated real-time HUD | ~30s |
+
+---
+
 ## Executive Summary
 
 **The primary purpose of this project is to provide a mathematically rigorous, real-time proof of concept for the Subsense BCI architecture by solving the "Inverse Problem"** — the extraction of clean neural intent from a massive, noisy sensor cloud.
@@ -36,29 +92,45 @@ Traditional BCIs use fixed electrode arrays. Subsense proposes **fluidic magneto
 
 This project proves the inverse problem is solvable with PCA+ICA blind source separation.
 
-## Installation
+## Installation Options
 
+### Basic Install (Recommended)
 ```bash
-# Clone the repository
 git clone https://github.com/MDavis3/Subsense-BCI-RD.git
 cd Subsense-BCI-RD
-
-# Install in editable mode (recommended for development)
 pip install -e .
-
-# Or install with all optional dependencies
-pip install -e ".[full]"
-
-# Or install with dev tools (pytest, black, ruff)
-pip install -e ".[dev]"
 ```
 
-## Quick Start
+### With All Dependencies
+```bash
+pip install -e ".[full]"      # Includes Streamlit dashboard
+pip install -e ".[dev]"       # Includes pytest, black, ruff
+```
 
+### Verify Installation
+```bash
+python -c "from subsense_bci.physics.transfer_function import compute_lead_field; print('✓ Installation successful')"
+```
+
+---
+
+## 🔧 Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `ModuleNotFoundError: subsense_bci` | Run `pip install -e .` from the project root |
+| `FileNotFoundError: sensors_N10000...` | Run Phase 1 first: `python notebooks/visualize_cloud.py` |
+| Dashboard won't start | Install Streamlit: `pip install streamlit` |
+| Tests fail | Ensure you're in project root and ran `pip install -e ".[dev]"` |
+
+---
+
+## Code Examples
+
+### Basic: Compute Lead Field
 ```python
 from subsense_bci.physics.transfer_function import compute_lead_field
 from subsense_bci.filtering.unmixing import unmix_sources
-from subsense_bci.visualization.theme import COLORS, apply_dark_theme
 
 # Compute lead field for sensor-source geometry
 lead_field, singularity_mask = compute_lead_field(sensors, sources)
@@ -68,8 +140,7 @@ result = unmix_sources(recording, ground_truth)
 print(f"Recovery correlations: {result.matched_correlations}")
 ```
 
-### Real-Time Decoding Example
-
+### Advanced: Real-Time Decoding
 ```python
 from subsense_bci.simulation.streamer import DataStreamer
 from subsense_bci.filtering.online_decoder import OnlineDecoder
@@ -175,14 +246,17 @@ subsense-bci-rd/
 ## Running Tests
 
 ```bash
-# Run all tests
+# Quick test (recommended first run)
+pytest tests/test_physics.py -v
+
+# Run all 77 tests
 pytest tests/ -v
 
-# Run with coverage
+# Run with coverage report
 pytest tests/ --cov=subsense_bci --cov-report=term-missing
 ```
 
-**Current status: 77 tests passing**
+**Current status: 77 tests passing** ✅
 
 ## Configuration
 
