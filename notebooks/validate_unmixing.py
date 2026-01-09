@@ -161,6 +161,17 @@ def plot_correlation_matrix(
     setup_axis_style(ax, "CORRELATION MATRIX")
     ax.grid(False)
 
+    # Explanatory note for off-diagonal values
+    ax.text(
+        0.5, -0.18,
+        "Note: Small off-diagonal values expected\n(pink noise has broadband 10Hz energy)",
+        transform=ax.transAxes,
+        fontsize=7,
+        color=COLORS["text_secondary"],
+        ha="center",
+        va="top",
+    )
+
 
 def plot_psd_comparison(
     ax,
@@ -171,6 +182,7 @@ def plot_psd_comparison(
     """Plot power spectral density comparison."""
 
     source_colors = [COLORS["source_a"], COLORS["source_b"], COLORS["source_c"]]
+    source_names = ["Alpha", "Beta", "Pink"]
 
     for i in range(3):
         # Compute PSD for ground truth
@@ -190,6 +202,7 @@ def plot_psd_comparison(
             color=source_colors[i],
             linewidth=1.2,
             alpha=0.9,
+            label=f"{source_names[i]} (GT)" if i == 0 else None,
         )
         ax.semilogy(
             f_rec, psd_rec + offset,
@@ -197,13 +210,33 @@ def plot_psd_comparison(
             linewidth=1.0,
             alpha=0.7,
             linestyle="--",
+            label="Recovered" if i == 0 else None,
+        )
+
+        # Add source label at right edge
+        ax.text(
+            52, offset + 0.5,
+            source_names[i],
+            fontsize=7,
+            fontfamily="monospace",
+            color=source_colors[i],
+            va="center",
         )
 
     setup_axis_style(ax, "POWER SPECTRAL DENSITY")
     ax.set_xlabel("Frequency (Hz)", color=COLORS["text_secondary"], fontsize=9)
     ax.set_ylabel("PSD (normalized)", color=COLORS["text_secondary"], fontsize=9)
-    ax.set_xlim([0, 50])
+    ax.set_xlim([0, 55])
     ax.set_ylim([1e-4, 10])
+
+    # Legend for line styles
+    ax.legend(
+        loc="lower left",
+        fontsize=7,
+        facecolor=COLORS["panel_bg"],
+        edgecolor=COLORS["grid_line"],
+        labelcolor=COLORS["text_primary"],
+    )
 
 
 def render_metrics_panel(
@@ -264,6 +297,16 @@ def render_metrics_panel(
         ax.text(0.55, y_pos, f"r={corr:.3f}", fontsize=8, fontfamily="monospace", color=COLORS["text_primary"])
         ax.text(0.85, y_pos, quality, fontsize=8, fontfamily="monospace", color=q_color, ha="right")
         y_pos -= 0.07
+
+    # Note about high recovery (addresses r=0.9999 concern)
+    ax.text(
+        0.5, y_pos - 0.02,
+        "(10K sensors provide high redundancy)",
+        fontsize=6,
+        fontfamily="monospace",
+        color=COLORS["text_secondary"],
+        ha="center",
+    )
 
     # Overall status
     avg_corr = np.mean(result.matched_correlations)

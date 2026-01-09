@@ -353,6 +353,19 @@ def plot_decay_validation(
         linewidth=1.5,
         alpha=0.7,
     )
+
+    # Annotation explaining divergence at small distances
+    ax.text(
+        SINGULARITY_THRESHOLD_MM * 0.7,
+        v_theory[0] * 0.3,
+        "Clamped\n(expected)",
+        fontsize=7,
+        fontfamily="monospace",
+        color=COLORS["safety_yellow"],
+        ha="center",
+        va="top",
+        alpha=0.9,
+    )
     
     ax.set_xlabel("Distance (mm)", color=COLORS["text_secondary"], fontsize=9)
     ax.set_ylabel("Lead Field (V/A)", color=COLORS["text_secondary"], fontsize=9)
@@ -595,10 +608,7 @@ def main() -> None:
     print("=" * 60)
     print(f"  Dashboard saved: {output_path}")
     print("=" * 60)
-    
-    # Also update the old filename for backwards compatibility
-    plt.savefig(output_dir / "phase1_validation.png", dpi=150, bbox_inches="tight", facecolor=COLORS["background"])
-    
+
     # Show (uncomment for interactive viewing)
     # plt.show()
 

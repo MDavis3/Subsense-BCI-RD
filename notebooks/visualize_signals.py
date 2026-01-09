@@ -60,9 +60,11 @@ def plot_source_waveforms(
     ]
 
     # Plot each source with vertical offset for clarity
+    # Z-score normalize each source so pink noise is visible alongside sinusoids
     offsets = [2, 0, -2]
     for i, (label, color) in enumerate(source_labels):
         signal = source_waveforms[i, mask]
+        signal = (signal - np.mean(signal)) / np.std(signal)  # Normalize for display
         ax.plot(
             t * 1000,  # Convert to ms
             signal + offsets[i],
@@ -87,7 +89,7 @@ def plot_source_waveforms(
 
     setup_axis_style(ax, "TRUE SOURCE WAVEFORMS [S(t)]")
     ax.set_xlabel("Time (ms)", color=COLORS["text_secondary"], fontsize=9)
-    ax.set_ylabel("Amplitude (a.u.)", color=COLORS["text_secondary"], fontsize=9)
+    ax.set_ylabel("Amplitude (z-scored)", color=COLORS["text_secondary"], fontsize=9)
     ax.set_xlim([time_window[0] * 1000 - 20, time_window[1] * 1000])
     ax.set_ylim([-4, 4])
 
