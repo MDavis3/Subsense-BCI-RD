@@ -2,6 +2,12 @@
 
 Neural signal processing pipeline for magnetoelectric (ME) nanoparticle brain-computer interfaces.
 
+<p align="center">
+  <img src="data/processed/phase3_unmixing.png" alt="Source Recovery Results" width="800"/>
+</p>
+
+<p align="center"><i>Recovering 3 neural signals from 10,000 noisy sensor measurements with r = 0.989 correlation</i></p>
+
 ---
 
 ## 🚀 Quick Start (2 minutes)
@@ -77,10 +83,25 @@ This pipeline establishes a validated R&D foundation for addressing critical rea
 
 This repository implements a complete forward-inverse BCI simulation with real-time decoding:
 
-1. **Phase 1: Sensor Cloud** — Generate 10,000 ME nanoparticle sensors in a 1mm³ volume
-2. **Phase 2: Temporal Dynamics** — Simulate neural source waveforms (10Hz α, 20Hz β, pink noise) mixed through a physics-based lead field
-3. **Phase 3: Source Unmixing** — Recover original sources via PCA dimensionality reduction + FastICA blind source separation
-4. **Phase 4: Real-Time Decoding** — Online BCI pipeline with chunk-based streaming, achieving r=0.989 correlation at 42.7ms latency
+### Phase 1: Sensor Cloud
+Generate 10,000 ME nanoparticle sensors in a 1mm³ volume with physics-validated 1/r signal decay.
+
+<p align="center">
+  <img src="data/processed/phase1_dashboard.png" alt="Phase 1: Sensor Cloud" width="800"/>
+</p>
+
+### Phase 2: Temporal Dynamics
+Simulate neural source waveforms (10Hz α, 20Hz β, pink noise) mixed through a physics-based lead field.
+
+<p align="center">
+  <img src="data/processed/phase2_signals.png" alt="Phase 2: Signal Mixing" width="800"/>
+</p>
+
+### Phase 3: Source Unmixing
+Recover original sources via PCA dimensionality reduction + FastICA blind source separation.
+
+### Phase 4: Real-Time Decoding
+Online BCI pipeline with chunk-based streaming, achieving r=0.989 correlation at 42.7ms latency.
 
 ### The Inverse Problem
 
